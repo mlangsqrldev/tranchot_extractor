@@ -11,6 +11,7 @@ import numpy as np
 import cv2
 from scipy.ndimage import maximum_filter
 from shapely.geometry import Polygon, MultiPolygon
+from shapely.ops import unary_union
 import geopandas as gpd
 
 from tranchot_extractor.config import BuildingConfig
@@ -240,6 +241,55 @@ def separate_building_clusters(comp_mask: np.ndarray, min_area: float = 6.0) -> 
             separated.append(w_mask)
 
     return separated if separated else [comp_mask]
+
+
+def despike_and_regularize(poly: Polygon, simplify_eps: float = 2.5) -> Tuple[Polygon, float]:
+    """
+    Consolidates building geometry, eliminates single-pixel staircase spikes, and regularizes
+    footprints into crisp architectural rectangular/Manhattan shapes.
+    """
+    if not poly.is_valid or poly.is_empty:
+        return poly, 0.0
+
+    coords = np.array(poly.exterior.coords, dtype=np.float32)
+    if len(coords) < 4:
+        return poly, 0.0
+
+    cnt = coords.reshape(-1, 1, 2).astype(np.int32)
+    rect = cv2.minAreaRect(cnt)
+    (cx, cy), (rw, rh), angle = rect
+    min_box_area = rw * rh
+    area = poly.area
+    rect_ratio = area / (min_box_area + 1e-6)
+
+    hull = cv2.convexHull(cnt)
+    solidity = area / (cv2.contourArea(hull) + 1e-6)
+
+    # 1. Simple freestanding rectangular houses (without courtyard holes) -> 4-corner bounding rectangle
+    if len(poly.interiors) == 0 and ((rect_ratio >= 0.68 and solidity >= 0.72) or (area <= 220.0 and solidity >= 0.70)):
+        box_pts = np.intp(cv2.boxPoints(rect))
+        p_rect = Polygon(box_pts)
+        if p_rect.is_valid and not p_rect.is_empty:
+            return p_rect, angle
+
+    # 2. Complex farmsteads / courtyard wings -> Snap to 90 degree orthogonal Manhattan ring
+    p_man = regularize_manhattan_contour(cnt, angle_deg=angle, simplify_eps=simplify_eps)
+    if p_man is not None and p_man.is_valid and not p_man.is_empty:
+        # Preserve interior courtyards
+        for interior in poly.interiors:
+            h_pts = np.array(interior.coords)
+            if len(h_pts) >= 4:
+                h_poly = Polygon(h_pts).buffer(0)
+                if h_poly.is_valid and h_poly.area >= 12.0:
+                    try:
+                        p_man = p_man.difference(h_poly)
+                    except Exception:
+                        pass
+        if isinstance(p_man, Polygon):
+            return p_man, angle
+
+    # 3. Fallback Douglas-Peucker simplification
+    return poly.simplify(simplify_eps, preserve_topology=True), angle
 
 
 def regularize_orthogonal_ring(
@@ -472,26 +522,36 @@ class BuildingExtractor:
                     scoped_polys.append((poly, ang))
             raw_polys = scoped_polys
 
-        # 3. Spatial Non-Maximum Suppression / Deduplication with fast bounding box pre-check
+        # 3. Consolidate fragmented house pieces and despike polygons into clean blocks
+        valid_raw = [p for p, ang in raw_polys if p.is_valid and not p.is_empty]
+        if valid_raw:
+            try:
+                solid_raw = [p for p in valid_raw if len(p.interiors) == 0]
+                holed_raw = [p for p in valid_raw if len(p.interiors) > 0]
+                merged_list = list(holed_raw)
+
+                if solid_raw:
+                    buffered = [p.buffer(1.2, join_style=2) for p in solid_raw]
+                    merged_union = unary_union(buffered)
+                    unbuffered = merged_union.buffer(-1.2, join_style=2)
+                    if isinstance(unbuffered, Polygon):
+                        merged_list.append(unbuffered)
+                    elif isinstance(unbuffered, MultiPolygon):
+                        merged_list.extend(list(unbuffered.geoms))
+                if not merged_list:
+                    merged_list = valid_raw
+            except Exception:
+                merged_list = valid_raw
+        else:
+            merged_list = []
+
         clean_polys: List[Tuple[Polygon, float]] = []
-        for poly, ang in raw_polys:
-            if not poly.is_valid or poly.is_empty:
+        for poly in merged_list:
+            if not poly.is_valid or poly.is_empty or poly.area < self.config.min_building_area_px:
                 continue
-            minx, miny, maxx, maxy = poly.bounds
-            is_dup = False
-            for existing_poly, _ in clean_polys:
-                e_minx, e_miny, e_maxx, e_maxy = existing_poly.bounds
-                if maxx < e_minx or minx > e_maxx or maxy < e_miny or miny > e_maxy:
-                    continue
-                try:
-                    inter_area = poly.intersection(existing_poly).area
-                    if inter_area > 0.60 * min(poly.area, existing_poly.area):
-                        is_dup = True
-                        break
-                except Exception:
-                    pass
-            if not is_dup:
-                clean_polys.append((poly, ang))
+            p_clean, ang = despike_and_regularize(poly, simplify_eps=self.config.simplify_tolerance)
+            if p_clean.is_valid and not p_clean.is_empty and p_clean.area >= self.config.min_building_area_px:
+                clean_polys.append((p_clean, ang))
 
         # 4. Build features and GeoDataFrame
         features: List[BuildingFeature] = []

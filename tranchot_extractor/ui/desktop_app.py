@@ -944,10 +944,10 @@ class TranchotDesktopApp(ctk.CTk):
         self.swatch_box.pack_propagate(False)
         self.swatch_box.pack(side="left", padx=8, pady=6)
 
-        self.lbl_swatch_info = ctk.CTkLabel(self.swatch_frame, text="Farbe: Standard-Vorlage\nKlicke Karte zum Samplen", font=ctk.CTkFont(size=11), justify="left")
+        self.lbl_swatch_info = ctk.CTkLabel(self.swatch_frame, text="Farbe: Standard-Vorlage\nKlicke Karte zum Samplen", font=ctk.CTkFont(size=11), text_color=THEME_TEXT_MAIN, justify="left")
         self.lbl_swatch_info.pack(side="left", padx=4, pady=4)
 
-        self.lbl_tol_header = ctk.CTkLabel(card_pipette, text="Toleranz / Farbabstand (ΔE = 8):", font=ctk.CTkFont(size=11, weight="bold"))
+        self.lbl_tol_header = ctk.CTkLabel(card_pipette, text="Toleranz / Farbabstand (ΔE = 8):", font=ctk.CTkFont(size=11, weight="bold"), text_color=THEME_TEXT_MAIN)
         self.lbl_tol_header.pack(anchor="w", padx=12, pady=(6, 0))
 
         self.slider_tol = ctk.CTkSlider(card_pipette, from_=2, to=25, number_of_steps=23, command=self._on_tolerance_changed)
@@ -1061,14 +1061,14 @@ class TranchotDesktopApp(ctk.CTk):
         )
         btn_bldg_click.pack(fill="x", padx=12, pady=3)
 
-        self.lbl_bldg_diff_header = ctk.CTkLabel(card_bldg, text="Rot-Empfindlichkeit (RGB-Diff = 14):", font=ctk.CTkFont(size=11, weight="bold"))
+        self.lbl_bldg_diff_header = ctk.CTkLabel(card_bldg, text="Rot-Empfindlichkeit (RGB-Diff = 14):", font=ctk.CTkFont(size=11, weight="bold"), text_color=THEME_TEXT_MAIN)
         self.lbl_bldg_diff_header.pack(anchor="w", padx=12, pady=(6, 0))
 
         self.slider_bldg_diff = ctk.CTkSlider(card_bldg, from_=8, to=40, number_of_steps=32, command=self._on_bldg_diff_changed)
         self.slider_bldg_diff.set(14)
         self.slider_bldg_diff.pack(fill="x", padx=12, pady=2)
 
-        self.lbl_bldg_min_area = ctk.CTkLabel(card_bldg, text="Mindestfläche (6 px²):", font=ctk.CTkFont(size=11))
+        self.lbl_bldg_min_area = ctk.CTkLabel(card_bldg, text="Mindestfläche (6 px²):", font=ctk.CTkFont(size=11), text_color=THEME_TEXT_MAIN)
         self.lbl_bldg_min_area.pack(anchor="w", padx=12, pady=(4, 0))
 
         self.slider_bldg_area = ctk.CTkSlider(card_bldg, from_=4, to=40, number_of_steps=36, command=self._on_bldg_area_changed)
@@ -1076,22 +1076,31 @@ class TranchotDesktopApp(ctk.CTk):
         self.slider_bldg_area.pack(fill="x", padx=12, pady=2)
 
         self.cb_filter_terraces_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(card_bldg, text="🍇 Weinberg-Terrassen & Schraffen filtern", variable=self.cb_filter_terraces_var, font=ctk.CTkFont(size=11)).pack(anchor="w", padx=12, pady=2)
+        ctk.CTkCheckBox(card_bldg, text="🍇 Weinberg-Terrassen & Schraffen filtern", variable=self.cb_filter_terraces_var, font=ctk.CTkFont(size=11), text_color=THEME_TEXT_MAIN).pack(anchor="w", padx=12, pady=2)
 
         self.cb_regularize_rect_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(card_bldg, text="📐 Einzelhäuser zu 4-Eck-Rechtecken", variable=self.cb_regularize_rect_var, font=ctk.CTkFont(size=11)).pack(anchor="w", padx=12, pady=2)
+        ctk.CTkCheckBox(card_bldg, text="📐 Einzelhäuser zu 4-Eck-Rechtecken", variable=self.cb_regularize_rect_var, font=ctk.CTkFont(size=11), text_color=THEME_TEXT_MAIN).pack(anchor="w", padx=12, pady=2)
 
         self.cb_regularize_ortho_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(card_bldg, text="🏛️ Hofanlagen 90° orthogonal ausrichten", variable=self.cb_regularize_ortho_var, font=ctk.CTkFont(size=11)).pack(anchor="w", padx=12, pady=2)
+        ctk.CTkCheckBox(card_bldg, text="🏛️ Hofanlagen 90° orthogonal ausrichten", variable=self.cb_regularize_ortho_var, font=ctk.CTkFont(size=11), text_color=THEME_TEXT_MAIN).pack(anchor="w", padx=12, pady=2)
+
+        btn_auto_settlement_bldgs = ctk.CTkButton(
+            card_bldg,
+            text="⚡ Nur Gebäude in Siedlungsgrenzen",
+            command=self._run_settlement_buildings,
+            fg_color="#8e44ad", hover_color="#9b59b6",
+            height=36, font=ctk.CTkFont(size=12, weight="bold")
+        )
+        btn_auto_settlement_bldgs.pack(fill="x", padx=12, pady=(8, 2))
 
         btn_auto_all_bldgs = ctk.CTkButton(
             card_bldg,
             text="⚡ Alle Gebäude der Karte extrahieren",
             command=self._run_auto_buildings,
             fg_color="#c0392b", hover_color="#e74c3c",
-            height=36, font=ctk.CTkFont(size=12, weight="bold")
+            height=34, font=ctk.CTkFont(size=12, weight="bold")
         )
-        btn_auto_all_bldgs.pack(fill="x", padx=12, pady=(8, 3))
+        btn_auto_all_bldgs.pack(fill="x", padx=12, pady=(2, 3))
 
         btn_clear_bldgs = ctk.CTkButton(
             card_bldg,
@@ -1183,13 +1192,14 @@ class TranchotDesktopApp(ctk.CTk):
 
             btn_select = ctk.CTkButton(
                 row, text=lbl_text, width=150, height=24, fg_color="transparent",
-                font=ctk.CTkFont(size=11), anchor="w",
+                text_color=THEME_TEXT_MAIN, hover_color=("#E2E8F0", "#334155"),
+                font=ctk.CTkFont(size=11, weight="bold"), anchor="w",
                 command=lambda c=cid, l=lbl_text: self._activate_class_pipette(c, l)
             )
             btn_select.pack(side="left", padx=2)
 
             btn_ext = ctk.CTkButton(
-                row, text="⚡", width=28, height=24, fg_color="#2c3e50", hover_color="#34495e",
+                row, text="⚡", width=28, height=24, fg_color="#2c3e50", hover_color="#3498db",
                 command=lambda c=cid: self._run_extract_specific_class(c)
             )
             btn_ext.pack(side="right", padx=4)
@@ -1404,12 +1414,28 @@ class TranchotDesktopApp(ctk.CTk):
                 poly = poly.buffer(0)
             if poly.is_valid and not poly.is_empty and isinstance(poly, Polygon):
                 self.settlement_boundaries.append(poly)
+                if self.extracted_buildings:
+                    self.extracted_buildings = [
+                        p for p in self.extracted_buildings
+                        if any(sb.intersects(p.centroid) or sb.intersects(p) for sb in self.settlement_boundaries)
+                    ]
+                    self._update_counts()
                 self.lbl_status.configure(
-                    text=f"🏘️ Siedlungsgrenze #{len(self.settlement_boundaries)} gespeichert! Gebäude werden auf diesen Bereich beschränkt."
+                    text=f"🏘️ Siedlungsgrenze #{len(self.settlement_boundaries)} aktiv! Klicke '⚡ Nur Gebäude in Siedlungsgrenzen' zum Extrahieren."
                 )
                 self.canvas.redraw()
         except Exception as e:
             self._on_error(f"Siedlungsgrenze Fehler: {e}")
+
+    def _run_settlement_buildings(self):
+        if self.current_np is None:
+            return
+        if not self.settlement_boundaries:
+            self.lbl_status.configure(
+                text="ℹ️ Keine Siedlungsgrenze aktiv. Klicke auf '🏘️ Siedlungs-Grenze zeichnen', um das Dorf einzugrenzen!"
+            )
+            return
+        self._run_auto_buildings()
 
     def _clear_settlement_boundaries(self):
         self.settlement_boundaries.clear()

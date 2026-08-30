@@ -132,6 +132,57 @@ class PipetteSampler:
         self.samples[class_id] = sample
         return sample
 
+    def sample_from_polygon(
+        self,
+        image_rgb: np.ndarray,
+        class_id: str,
+        polygon_pts: List[Tuple[float, float]],
+    ) -> ColorSample:
+        """
+        Extracts multi-point pixel and texture distribution inside a user-drawn polygon.
+        Calculates LAB centroid, covariance, and texture roughness.
+        """
+        h, w = image_rgb.shape[:2]
+        poly_np = np.array(polygon_pts, dtype=np.int32)
+        poly_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(poly_mask, [poly_np], 255)
+
+        inside_pixels = image_rgb[poly_mask > 0]
+        if len(inside_pixels) == 0:
+            return self.samples.get(class_id, None)
+
+        mean_rgb = np.mean(inside_pixels, axis=0).astype(int).tolist()
+        hsv = list(cv2.cvtColor(np.uint8([[mean_rgb]]), cv2.COLOR_RGB2HSV)[0, 0])
+        lab = list(cv2.cvtColor(np.uint8([[mean_rgb]]), cv2.COLOR_RGB2LAB)[0, 0])
+        hex_col = "#{:02x}{:02x}{:02x}".format(mean_rgb[0], mean_rgb[1], mean_rgb[2])
+
+        # Compute texture variance inside the polygon
+        gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+        blur_g = cv2.GaussianBlur(gray, (13, 13), 0)
+        local_var = cv2.GaussianBlur((gray - blur_g) ** 2, (13, 13), 0)
+        poly_var = float(np.mean(local_var[poly_mask > 0]))
+
+        tex_w = max(-1.2, min(1.5, (poly_var - 35.0) / 30.0))
+
+        existing = self.samples.get(class_id)
+        label = existing.label if existing else class_id
+        tol = max(18, min(36, int(np.std(inside_pixels))))
+
+        sample = ColorSample(
+            class_id=class_id,
+            label=label,
+            rgb=mean_rgb,
+            hsv=[int(x) for x in hsv],
+            lab=[int(x) for x in lab],
+            hex_color=hex_col,
+            tolerance=tol,
+            active=True,
+            sampled_points=[mean_rgb],
+            texture_weight=tex_w,
+        )
+        self.samples[class_id] = sample
+        return sample
+
     def extract_competitive_polygons(
         self,
         image_rgb: np.ndarray,

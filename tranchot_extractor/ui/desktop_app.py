@@ -103,9 +103,14 @@ class MapCanvas(tk.Canvas):
         self.drag_current_y = 0
         self.is_dragging_box = False
 
+        self.polygon_pts: List[Tuple[float, float]] = []
+        self.cursor_canvas_x: Optional[float] = None
+        self.cursor_canvas_y: Optional[float] = None
+
         self.bind("<ButtonPress-1>", self._on_left_press)
         self.bind("<B1-Motion>", self._on_left_drag)
         self.bind("<ButtonRelease-1>", self._on_left_release)
+        self.bind("<Double-Button-1>", self._on_double_click)
 
         self.bind("<ButtonPress-2>", self._on_pan_press)
         self.bind("<B2-Motion>", self._on_pan_drag)
@@ -119,6 +124,10 @@ class MapCanvas(tk.Canvas):
 
         self.bind("<Motion>", self._on_mouse_move)
         self.bind("<Configure>", lambda e: self.redraw())
+
+        self.bind_all("<Return>", lambda e: self._finish_current_polygon())
+        self.bind_all("<Escape>", lambda e: self._cancel_current_polygon())
+        self.bind_all("<BackSpace>", lambda e: self._undo_polygon_point())
 
     def _get_theme_canvas_bg(self) -> str:
         mode = ctk.get_appearance_mode().lower()
@@ -185,6 +194,17 @@ class MapCanvas(tk.Canvas):
 
         ix, iy = self.canvas_to_image_coords(event.x, event.y)
 
+        if self.app.active_tool in ("pattern_poly", "settlement_poly"):
+            if len(self.polygon_pts) >= 3:
+                p0_cx, p0_cy = self.image_to_canvas_coords(self.polygon_pts[0][0], self.polygon_pts[0][1])
+                dist_px = ((event.x - p0_cx)**2 + (event.y - p0_cy)**2)**0.5
+                if dist_px < 15.0:
+                    self._finish_current_polygon()
+                    return
+            self.polygon_pts.append((ix, iy))
+            self.redraw()
+            return
+
         if self.app.active_tool == "pipette":
             self.app.handle_pipette_sample_at(ix, iy)
             return
@@ -203,6 +223,35 @@ class MapCanvas(tk.Canvas):
             self.app.extract_single_building_at(ix, iy)
         elif self.app.active_tool == "road_snap":
             self.app.handle_road_snap_click(ix, iy)
+
+    def _on_double_click(self, event):
+        if self.app.active_tool in ("pattern_poly", "settlement_poly") and len(self.polygon_pts) >= 3:
+            self._finish_current_polygon()
+
+    def _finish_current_polygon(self):
+        if len(self.polygon_pts) < 3:
+            self.polygon_pts.clear()
+            self.redraw()
+            return
+        pts = list(self.polygon_pts)
+        self.polygon_pts.clear()
+        tool = self.app.active_tool
+        if tool == "pattern_poly":
+            self.app.handle_pattern_polygon(pts)
+        elif tool == "settlement_poly":
+            self.app.handle_settlement_polygon(pts)
+        self.redraw()
+
+    def _cancel_current_polygon(self):
+        if self.polygon_pts:
+            self.polygon_pts.clear()
+            self.app.lbl_status.configure(text="Polygon-Zeichnung abgebrochen.")
+            self.redraw()
+
+    def _undo_polygon_point(self):
+        if self.polygon_pts:
+            self.polygon_pts.pop()
+            self.redraw()
 
     def _on_left_drag(self, event):
         if self.app.active_tool == "pan":
@@ -227,6 +276,9 @@ class MapCanvas(tk.Canvas):
                 self.app.handle_landuse_roi_box(ix0, iy0, ix1, iy1)
 
     def _on_right_press(self, event):
+        if self.polygon_pts:
+            self._cancel_current_polygon()
+            return
         ix, iy = self.canvas_to_image_coords(event.x, event.y)
         self.app.delete_feature_at(ix, iy)
 
@@ -247,8 +299,12 @@ class MapCanvas(tk.Canvas):
         self.redraw()
 
     def _on_mouse_move(self, event):
+        self.cursor_canvas_x = event.x
+        self.cursor_canvas_y = event.y
         ix, iy = self.canvas_to_image_coords(event.x, event.y)
         self.app.update_coordinates_hud(ix, iy)
+        if self.app.active_tool in ("pattern_poly", "settlement_poly") and len(self.polygon_pts) > 0:
+            self.redraw()
 
     def redraw(self):
         self.delete("all")
@@ -305,6 +361,12 @@ class MapCanvas(tk.Canvas):
         if self.app.show_toponyms_var.get():
             self._draw_toponym_labels()
 
+        # Draw Settlement Boundaries (Exclusion Zones)
+        self._draw_settlement_boundaries()
+
+        # Draw Active Polygon In-Progress
+        self._draw_active_polygon()
+
         # Temporary road snapping point
         if self.app.road_start_pt is not None:
             cx, cy = self.image_to_canvas_coords(*self.app.road_start_pt)
@@ -330,6 +392,36 @@ class MapCanvas(tk.Canvas):
 
             self.create_rectangle(bx0, by0, bx1, by1, outline=box_color, width=2, dash=(4, 2))
             self.create_text(bx0 + 6, by0 + 12, text=box_tag, fill=box_color, font=("Segoe UI", 10, "bold"), anchor="w")
+
+    def _draw_settlement_boundaries(self):
+        for idx, poly in enumerate(self.app.settlement_boundaries, 1):
+            if not poly or poly.is_empty or not poly.exterior:
+                continue
+            canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
+            flat_pts = [c for pt in canvas_pts for c in pt]
+            if len(flat_pts) >= 6:
+                self.create_polygon(*flat_pts, fill="", outline="#8e44ad", width=3, dash=(6, 3))
+                ccx, ccy = self.image_to_canvas_coords(poly.centroid.x, poly.centroid.y)
+                self.create_text(ccx, ccy, text=f"🏘️ Siedlung #{idx}", fill="#8e44ad", font=("Segoe UI", 11, "bold"))
+
+    def _draw_active_polygon(self):
+        if not self.polygon_pts:
+            return
+        canvas_pts = [self.image_to_canvas_coords(px, py) for px, py in self.polygon_pts]
+        for i, (pcx, pcy) in enumerate(canvas_pts):
+            r = 5
+            col = "#2ecc71" if i == 0 else "#f39c12"
+            self.create_oval(pcx - r, pcy - r, pcx + r, pcy + r, fill=col, outline="#ffffff", width=1.5)
+            if i == 0 and len(canvas_pts) >= 3:
+                self.create_text(pcx + 8, pcy - 8, text="Start (Klick zum Schließen)", fill="#27ae60", font=("Segoe UI", 9, "bold"), anchor="w")
+
+        if len(canvas_pts) > 1:
+            flat_pts = [c for pt in canvas_pts for c in pt]
+            self.create_line(*flat_pts, fill="#f39c12", width=2, dash=(4, 2))
+
+        if self.cursor_canvas_x is not None and self.cursor_canvas_y is not None and len(canvas_pts) > 0:
+            last_cx, last_cy = canvas_pts[-1]
+            self.create_line(last_cx, last_cy, self.cursor_canvas_x, self.cursor_canvas_y, fill="#e74c3c", width=2)
 
     def _draw_polygons(self, polygons: List[Polygon], spec: Dict[str, str]):
         fill_col = spec["fill"]
@@ -549,6 +641,7 @@ class TranchotDesktopApp(ctk.CTk):
         self.extracted_layers: Dict[str, List[Polygon]] = {
             "forest": [], "meadow": [], "water": [], "gravel": [], "vineyard": [], "garden": []
         }
+        self.settlement_boundaries: List[Polygon] = []
 
         self.selected_building_idx: Optional[int] = None
         self.selected_road_idx: Optional[int] = None
@@ -556,7 +649,7 @@ class TranchotDesktopApp(ctk.CTk):
         self.road_start_pt: Optional[Tuple[float, float]] = None
         self.active_tool: str = "pipette"
 
-        self.swatch_boxes: Dict[str, tk.Label] = {}
+        self.swatch_boxes: Dict[str, Any] = {}
 
         # Setup GUI layout
         self._setup_layout()
@@ -839,7 +932,16 @@ class TranchotDesktopApp(ctk.CTk):
         self.swatch_frame = ctk.CTkFrame(card_pipette, fg_color=THEME_SWATCH_FRAME, height=46)
         self.swatch_frame.pack(fill="x", padx=12, pady=4)
 
-        self.swatch_box = tk.Label(self.swatch_frame, text="", bg="#27ae60", width=4, height=1)
+        self.swatch_box = ctk.CTkFrame(
+            self.swatch_frame,
+            fg_color="#27ae60",
+            width=28,
+            height=24,
+            corner_radius=4,
+            border_width=1,
+            border_color=("#CBD5E1", "#475569")
+        )
+        self.swatch_box.pack_propagate(False)
         self.swatch_box.pack(side="left", padx=8, pady=6)
 
         self.lbl_swatch_info = ctk.CTkLabel(self.swatch_frame, text="Farbe: Standard-Vorlage\nKlicke Karte zum Samplen", font=ctk.CTkFont(size=11), justify="left")
@@ -852,14 +954,23 @@ class TranchotDesktopApp(ctk.CTk):
         self.slider_tol.set(8)
         self.slider_tol.pack(fill="x", padx=12, pady=2)
 
+        btn_pattern_poly = ctk.CTkButton(
+            card_pipette,
+            text="📐 Muster-Polygon zeichnen (Few-Shot)",
+            command=lambda: self._set_active_tool("pattern_poly"),
+            fg_color="#8e44ad", hover_color="#9b59b6",
+            height=34, font=ctk.CTkFont(size=12, weight="bold")
+        )
+        btn_pattern_poly.pack(fill="x", padx=12, pady=(6, 2))
+
         btn_landuse_box = ctk.CTkButton(
             card_pipette,
             text="📐 Flächen ROI-Box aufziehen (Testen)",
             command=lambda: self._set_active_tool("landuse_box"),
             fg_color="#27ae60", hover_color="#2ecc71",
-            height=34, font=ctk.CTkFont(size=12, weight="bold")
+            height=30, font=ctk.CTkFont(size=11)
         )
-        btn_landuse_box.pack(fill="x", padx=12, pady=(6, 3))
+        btn_landuse_box.pack(fill="x", padx=12, pady=2)
 
         btn_extract_competitive = ctk.CTkButton(
             card_pipette,
@@ -909,17 +1020,35 @@ class TranchotDesktopApp(ctk.CTk):
 
         lbl_bldg_desc = ctk.CTkLabel(
             card_bldg,
-            text="Ziehe eine ROI-Box auf der Karte auf, um Gebäude in einem Ausschnitt zu testen und zu extrahieren.",
+            text="Zeichne Siedlungsgrenzen zur Exklusion oder ziehe eine ROI-Box auf der Karte auf.",
             font=ctk.CTkFont(size=10), text_color=THEME_TEXT_MUTED, justify="left", wraplength=310
         )
         lbl_bldg_desc.pack(anchor="w", padx=12, pady=(0, 6))
+
+        btn_settlement_poly = ctk.CTkButton(
+            card_bldg,
+            text="🏘️ Siedlungs-Grenze zeichnen (Ausschluss)",
+            command=lambda: self._set_active_tool("settlement_poly"),
+            fg_color="#8e44ad", hover_color="#9b59b6",
+            height=34, font=ctk.CTkFont(size=12, weight="bold")
+        )
+        btn_settlement_poly.pack(fill="x", padx=12, pady=(2, 2))
+
+        btn_clear_settlement = ctk.CTkButton(
+            card_bldg,
+            text="🗑️ Siedlungsgrenzen zurücksetzen",
+            command=self._clear_settlement_boundaries,
+            fg_color="#7f8c8d", hover_color="#95a5a6",
+            height=26, font=ctk.CTkFont(size=10)
+        )
+        btn_clear_settlement.pack(fill="x", padx=12, pady=(1, 4))
 
         btn_bldg_box = ctk.CTkButton(
             card_bldg,
             text="📐 Gebäude ROI-Box aufziehen (Testen)",
             command=lambda: self._set_active_tool("bldg_box"),
             fg_color="#c0392b", hover_color="#e74c3c",
-            height=36, font=ctk.CTkFont(size=12, weight="bold")
+            height=34, font=ctk.CTkFont(size=12, weight="bold")
         )
         btn_bldg_box.pack(fill="x", padx=12, pady=3)
 
@@ -1039,8 +1168,17 @@ class TranchotDesktopApp(ctk.CTk):
             row = ctk.CTkFrame(parent, fg_color=THEME_SWATCH_FRAME, height=32)
             row.pack(fill="x", padx=12, pady=2)
 
-            swatch = tk.Label(row, text="", bg=init_hex, width=2, height=1)
-            swatch.pack(side="left", padx=(6, 4), pady=3)
+            swatch = ctk.CTkFrame(
+                row,
+                fg_color=init_hex,
+                width=24,
+                height=20,
+                corner_radius=4,
+                border_width=1,
+                border_color=("#CBD5E1", "#475569")
+            )
+            swatch.pack_propagate(False)
+            swatch.pack(side="left", padx=(8, 4), pady=3)
             self.swatch_boxes[cid] = swatch
 
             btn_select = ctk.CTkButton(
@@ -1084,9 +1222,9 @@ class TranchotDesktopApp(ctk.CTk):
     def _update_active_swatch_display(self):
         sample = self.sampler.samples.get(self.active_pipette_class)
         if sample:
-            self.swatch_box.configure(bg=sample.hex_color)
+            self.swatch_box.configure(fg_color=sample.hex_color)
             if self.active_pipette_class in self.swatch_boxes:
-                self.swatch_boxes[self.active_pipette_class].configure(bg=sample.hex_color)
+                self.swatch_boxes[self.active_pipette_class].configure(fg_color=sample.hex_color)
             self.slider_tol.set(sample.tolerance)
             self.lbl_tol_header.configure(text=f"Toleranz / Farbabstand (ΔE = {int(sample.tolerance)}):")
             status = "gesampelt" if sample.active else "Standard"
@@ -1245,6 +1383,39 @@ class TranchotDesktopApp(ctk.CTk):
         self.tool_var.set(tool_name)
         self._on_tool_change()
 
+    def handle_pattern_polygon(self, polygon_pts: List[Tuple[float, float]]):
+        if self.current_np is None or len(polygon_pts) < 3:
+            return
+
+        sample = self.sampler.sample_from_polygon(self.current_np, self.active_pipette_class, polygon_pts)
+        if sample:
+            self._update_active_swatch_display()
+            label = sample.label
+            self.lbl_status.configure(text=f"📐 Muster gelernt für '{label}' (Farbe + Textur). Extrahiere Flächen...")
+            self.update_idletasks()
+            threading.Thread(target=self._async_extract_sample, args=(self.active_pipette_class, sample.tolerance), daemon=True).start()
+
+    def handle_settlement_polygon(self, polygon_pts: List[Tuple[float, float]]):
+        if len(polygon_pts) < 3:
+            return
+        try:
+            poly = Polygon(polygon_pts)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if poly.is_valid and not poly.is_empty and isinstance(poly, Polygon):
+                self.settlement_boundaries.append(poly)
+                self.lbl_status.configure(
+                    text=f"🏘️ Siedlungsgrenze #{len(self.settlement_boundaries)} gespeichert! Gebäude werden auf diesen Bereich beschränkt."
+                )
+                self.canvas.redraw()
+        except Exception as e:
+            self._on_error(f"Siedlungsgrenze Fehler: {e}")
+
+    def _clear_settlement_boundaries(self):
+        self.settlement_boundaries.clear()
+        self.lbl_status.configure(text="Siedlungsgrenzen zurückgesetzt. Gebäude-Extraktion gilt für die gesamte Karte.")
+        self.canvas.redraw()
+
     def _clear_buildings_layer(self):
         count = len(self.extracted_buildings)
         self.extracted_buildings.clear()
@@ -1263,7 +1434,7 @@ class TranchotDesktopApp(ctk.CTk):
         cfg = self._get_current_building_config()
         extractor = BuildingExtractor(cfg)
         t0 = time.time()
-        result = extractor.extract(self.current_np)
+        result = extractor.extract(self.current_np, settlement_boundaries=self.settlement_boundaries)
         elapsed = time.time() - t0
 
         self.extracted_buildings = [f.geometry for f in result.features]
@@ -1309,6 +1480,9 @@ class TranchotDesktopApp(ctk.CTk):
         for f in result.features:
             p_global = translate(f.geometry, xoff=x0, yoff=y0)
             if p_global.is_valid and not p_global.is_empty:
+                if self.settlement_boundaries and len(self.settlement_boundaries) > 0:
+                    if not any(sb.intersects(p_global.centroid) or sb.intersects(p_global) for sb in self.settlement_boundaries):
+                        continue
                 self.extracted_buildings.append(p_global)
                 added_count += 1
 
@@ -1382,6 +1556,8 @@ class TranchotDesktopApp(ctk.CTk):
         self.road_start_pt = None
         names = {
             "pipette": "🎨 Farb-Pipette (Klick zum Samplen)",
+            "pattern_poly": "📐 Muster-Polygon (Eckpunkte klicken, Doppelklick oder Enter zum Abschließen)",
+            "settlement_poly": "🏘️ Siedlungs-Grenze (Eckpunkte um das Dorf klicken, Doppelklick zum Abschließen)",
             "bldg_box": "📐 Gebäude ROI-Box (Rechteck aufziehen zum Testen & Extrahieren)",
             "landuse_box": "🌲 Flächen ROI-Box (Rechteck aufziehen zum Testen & Extrahieren)",
             "extract": "🏛️ Gebäude-Klick (Einzelnes Gebäude anklicken)",

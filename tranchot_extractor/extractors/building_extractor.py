@@ -299,9 +299,14 @@ class BuildingExtractor:
     def __init__(self, config: Optional[BuildingConfig] = None):
         self.config = config or BuildingConfig()
 
-    def extract(self, image_rgb: np.ndarray) -> BuildingExtractionResult:
+    def extract(
+        self,
+        image_rgb: np.ndarray,
+        settlement_boundaries: Optional[List[Polygon]] = None,
+    ) -> BuildingExtractionResult:
         """
         Runs building segmentation, thin wall preservation, despiking, and polygonization.
+        If settlement_boundaries are provided, restricts extraction exclusively within these polygons.
         """
         h, w = image_rgb.shape[:2]
 
@@ -458,6 +463,14 @@ class BuildingExtractor:
                                 for p in poly.geoms:
                                     if isinstance(p, Polygon) and not p.is_empty:
                                         raw_polys.append((p, angle))
+
+        # Filter strictly within settlement boundaries if provided
+        if settlement_boundaries and len(settlement_boundaries) > 0:
+            scoped_polys = []
+            for poly, ang in raw_polys:
+                if any(sb.intersects(poly.centroid) or sb.intersects(poly) for sb in settlement_boundaries):
+                    scoped_polys.append((poly, ang))
+            raw_polys = scoped_polys
 
         # 3. Spatial Non-Maximum Suppression / Deduplication with fast bounding box pre-check
         clean_polys: List[Tuple[Polygon, float]] = []

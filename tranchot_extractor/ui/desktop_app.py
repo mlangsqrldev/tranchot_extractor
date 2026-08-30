@@ -364,6 +364,9 @@ class MapCanvas(tk.Canvas):
         # Draw Settlement Boundaries (Exclusion Zones)
         self._draw_settlement_boundaries()
 
+        # Draw Few-Shot Exemplar Training Polygons
+        self._draw_exemplar_polygons()
+
         # Draw Active Polygon In-Progress
         self._draw_active_polygon()
 
@@ -400,9 +403,22 @@ class MapCanvas(tk.Canvas):
             canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
             flat_pts = [c for pt in canvas_pts for c in pt]
             if len(flat_pts) >= 6:
-                self.create_polygon(*flat_pts, fill="", outline="#8e44ad", width=3, dash=(6, 3))
+                self.create_polygon(*flat_pts, fill="#8e44ad", outline="#8e44ad", width=3, dash=(6, 3), stipple="gray25")
                 ccx, ccy = self.image_to_canvas_coords(poly.centroid.x, poly.centroid.y)
-                self.create_text(ccx, ccy, text=f"🏘️ Siedlung #{idx}", fill="#8e44ad", font=("Segoe UI", 11, "bold"))
+                self.create_text(ccx, ccy, text=f"🏘️ Siedlung #{idx}", fill="#8e44ad", font=("Segoe UI", 12, "bold"))
+
+    def _draw_exemplar_polygons(self):
+        for cid, polys in self.app.exemplar_polygons.items():
+            spec = LAYER_COLOR_SPECS.get(cid, {"fill": "#8e44ad", "stroke": "#f1c40f"})
+            for p_idx, poly in enumerate(polys, 1):
+                if not poly or poly.is_empty or not poly.exterior:
+                    continue
+                canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
+                flat_pts = [c for pt in canvas_pts for c in pt]
+                if len(flat_pts) >= 6:
+                    self.create_polygon(*flat_pts, fill=spec["fill"], outline="#f1c40f", width=2.5, dash=(4, 2), stipple="gray50")
+                    ccx, ccy = self.image_to_canvas_coords(poly.centroid.x, poly.centroid.y)
+                    self.create_text(ccx, ccy, text=f"📐 Muster #{p_idx}", fill="#f39c12", font=("Segoe UI", 10, "bold"))
 
     def _draw_active_polygon(self):
         if not self.polygon_pts:
@@ -432,7 +448,7 @@ class MapCanvas(tk.Canvas):
             canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
             flat_pts = [c for pt in canvas_pts for c in pt]
             if len(flat_pts) >= 6:
-                self.create_polygon(*flat_pts, fill="", outline=stroke_col, width=1.5)
+                self.create_polygon(*flat_pts, fill=fill_col, outline=stroke_col, width=1.5, stipple="gray25")
 
     def _draw_roads(self):
         for idx, line in enumerate(self.app.extracted_roads):
@@ -642,6 +658,9 @@ class TranchotDesktopApp(ctk.CTk):
             "forest": [], "meadow": [], "water": [], "gravel": [], "vineyard": [], "garden": []
         }
         self.settlement_boundaries: List[Polygon] = []
+        self.exemplar_polygons: Dict[str, List[Polygon]] = {
+            "forest": [], "meadow": [], "water": [], "gravel": [], "vineyard": [], "garden": []
+        }
 
         self.selected_building_idx: Optional[int] = None
         self.selected_road_idx: Optional[int] = None
@@ -1027,12 +1046,12 @@ class TranchotDesktopApp(ctk.CTk):
 
         btn_settlement_poly = ctk.CTkButton(
             card_bldg,
-            text="🏘️ Siedlungs-Grenze zeichnen (Ausschluss)",
+            text="🏘️ Siedlungs-Grenze zeichnen (Sofort-Erkennung)",
             command=lambda: self._set_active_tool("settlement_poly"),
             fg_color="#8e44ad", hover_color="#9b59b6",
-            height=34, font=ctk.CTkFont(size=12, weight="bold")
+            height=36, font=ctk.CTkFont(size=12, weight="bold")
         )
-        btn_settlement_poly.pack(fill="x", padx=12, pady=(2, 2))
+        btn_settlement_poly.pack(fill="x", padx=12, pady=(4, 2))
 
         btn_clear_settlement = ctk.CTkButton(
             card_bldg,
@@ -1042,15 +1061,6 @@ class TranchotDesktopApp(ctk.CTk):
             height=26, font=ctk.CTkFont(size=10)
         )
         btn_clear_settlement.pack(fill="x", padx=12, pady=(1, 4))
-
-        btn_bldg_box = ctk.CTkButton(
-            card_bldg,
-            text="📐 Gebäude ROI-Box aufziehen (Testen)",
-            command=lambda: self._set_active_tool("bldg_box"),
-            fg_color="#c0392b", hover_color="#e74c3c",
-            height=34, font=ctk.CTkFont(size=12, weight="bold")
-        )
-        btn_bldg_box.pack(fill="x", padx=12, pady=3)
 
         btn_bldg_click = ctk.CTkButton(
             card_bldg,
@@ -1397,6 +1407,12 @@ class TranchotDesktopApp(ctk.CTk):
         if self.current_np is None or len(polygon_pts) < 3:
             return
 
+        poly = Polygon(polygon_pts)
+        if poly.is_valid and not poly.is_empty:
+            if self.active_pipette_class not in self.exemplar_polygons:
+                self.exemplar_polygons[self.active_pipette_class] = []
+            self.exemplar_polygons[self.active_pipette_class].append(poly)
+
         sample = self.sampler.sample_from_polygon(self.current_np, self.active_pipette_class, polygon_pts)
         if sample:
             self._update_active_swatch_display()
@@ -1404,9 +1420,10 @@ class TranchotDesktopApp(ctk.CTk):
             self.lbl_status.configure(text=f"📐 Muster gelernt für '{label}' (Farbe + Textur). Extrahiere Flächen...")
             self.update_idletasks()
             threading.Thread(target=self._async_extract_sample, args=(self.active_pipette_class, sample.tolerance), daemon=True).start()
+        self.canvas.redraw()
 
     def handle_settlement_polygon(self, polygon_pts: List[Tuple[float, float]]):
-        if len(polygon_pts) < 3:
+        if self.current_np is None or len(polygon_pts) < 3:
             return
         try:
             poly = Polygon(polygon_pts)
@@ -1414,18 +1431,38 @@ class TranchotDesktopApp(ctk.CTk):
                 poly = poly.buffer(0)
             if poly.is_valid and not poly.is_empty and isinstance(poly, Polygon):
                 self.settlement_boundaries.append(poly)
-                if self.extracted_buildings:
+
+                # Instant building extraction inside this settlement polygon
+                minx, miny, maxx, maxy = [int(v) for v in poly.bounds]
+                h, w = self.current_np.shape[:2]
+                x0, y0 = max(0, minx), max(0, miny)
+                x1, y1 = min(w, maxx), min(h, maxy)
+
+                if (x1 - x0) >= 6 and (y1 - y0) >= 6:
+                    crop_rgb = self.current_np[y0:y1, x0:x1]
+                    local_poly = translate(poly, xoff=-x0, yoff=-y0)
+                    cfg = self._get_current_building_config()
+                    extractor = BuildingExtractor(cfg)
+                    result = extractor.extract(crop_rgb, settlement_boundaries=[local_poly])
+
+                    # Remove old buildings inside this settlement envelope and insert newly extracted
                     self.extracted_buildings = [
-                        p for p in self.extracted_buildings
-                        if any(sb.intersects(p.centroid) or sb.intersects(p) for sb in self.settlement_boundaries)
+                        p for p in self.extracted_buildings if not poly.contains(p.centroid)
                     ]
+                    added_count = 0
+                    for f in result.features:
+                        p_global = translate(f.geometry, xoff=x0, yoff=y0)
+                        if p_global.is_valid and not p_global.is_empty:
+                            self.extracted_buildings.append(p_global)
+                            added_count += 1
+
                     self._update_counts()
-                self.lbl_status.configure(
-                    text=f"🏘️ Siedlungsgrenze #{len(self.settlement_boundaries)} aktiv! Klicke '⚡ Nur Gebäude in Siedlungsgrenzen' zum Extrahieren."
-                )
+                    self.lbl_status.configure(
+                        text=f"🏘️ Siedlungsgrenze #{len(self.settlement_boundaries)} aktiv: {added_count} Gebäude sofort erkannt!"
+                    )
                 self.canvas.redraw()
         except Exception as e:
-            self._on_error(f"Siedlungsgrenze Fehler: {e}")
+            self._on_error(f"Siedlung Extraktion Fehler: {e}")
 
     def _run_settlement_buildings(self):
         if self.current_np is None:

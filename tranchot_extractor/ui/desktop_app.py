@@ -993,7 +993,7 @@ class TranchotDesktopApp(ctk.CTk):
 
         btn_extract_competitive = ctk.CTkButton(
             card_pipette,
-            text="⚡ Alle Flächen kompetitiv extrahieren (Wettbewerb)",
+            text="⚡ Gelernte Flächen berechnen (OK)",
             command=self._run_extract_all_sampled_classes,
             fg_color="#16a085", hover_color="#1abc9c",
             height=34, font=ctk.CTkFont(size=12, weight="bold")
@@ -1002,7 +1002,7 @@ class TranchotDesktopApp(ctk.CTk):
 
         btn_extract_active = ctk.CTkButton(
             card_pipette,
-            text="🎯 Nur aktive Pipetten-Klasse extrahieren",
+            text="🎯 Nur aktive Klasse berechnen (OK)",
             command=self._run_extract_active_sample,
             fg_color="#2980b9", hover_color="#3498db",
             height=30, font=ctk.CTkFont(size=11)
@@ -1197,22 +1197,69 @@ class TranchotDesktopApp(ctk.CTk):
                 border_color=("#CBD5E1", "#475569")
             )
             swatch.pack_propagate(False)
-            swatch.pack(side="left", padx=(8, 4), pady=3)
+            swatch.pack(side="left", padx=(6, 4), pady=3)
             self.swatch_boxes[cid] = swatch
 
             btn_select = ctk.CTkButton(
-                row, text=lbl_text, width=150, height=24, fg_color="transparent",
+                row, text=lbl_text, width=130, height=24, fg_color="transparent",
                 text_color=THEME_TEXT_MAIN, hover_color=("#E2E8F0", "#334155"),
                 font=ctk.CTkFont(size=11, weight="bold"), anchor="w",
                 command=lambda c=cid, l=lbl_text: self._activate_class_pipette(c, l)
             )
             btn_select.pack(side="left", padx=2)
 
+            btn_reset = ctk.CTkButton(
+                row, text="↺", width=26, height=24, fg_color="#64748B", hover_color="#EF4444",
+                text_color="#FFFFFF", font=ctk.CTkFont(size=11, weight="bold"),
+                command=lambda c=cid, l=lbl_text: self._reset_specific_class_samples(c, l)
+            )
+            btn_reset.pack(side="right", padx=(2, 4))
+
             btn_ext = ctk.CTkButton(
-                row, text="⚡", width=28, height=24, fg_color="#2c3e50", hover_color="#3498db",
+                row, text="⚡", width=26, height=24, fg_color="#2c3e50", hover_color="#3498db",
                 command=lambda c=cid: self._run_extract_specific_class(c)
             )
-            btn_ext.pack(side="right", padx=4)
+            btn_ext.pack(side="right", padx=2)
+
+        btn_clear_all_samples = ctk.CTkButton(
+            parent,
+            text="🗑️ Alle Muster & Flächen zurücksetzen",
+            command=self._reset_all_class_samples,
+            fg_color="#64748B", hover_color="#EF4444",
+            height=28, font=ctk.CTkFont(size=11)
+        )
+        btn_clear_all_samples.pack(fill="x", padx=12, pady=(4, 8))
+
+    def _reset_specific_class_samples(self, class_id: str, label: str):
+        if class_id in self.exemplar_polygons:
+            self.exemplar_polygons[class_id].clear()
+        if class_id in self.extracted_layers:
+            self.extracted_layers[class_id].clear()
+        self.sampler.reset_class(class_id)
+        if class_id in self.swatch_boxes:
+            sample = self.sampler.get_sample(class_id)
+            if sample:
+                self.swatch_boxes[class_id].configure(fg_color=sample.hex_color)
+        if self.active_pipette_class == class_id:
+            self._update_active_swatch_display()
+        self._update_counts()
+        self.canvas.redraw()
+        self.lbl_status.configure(text=f"↺ Alle Muster & Flächen für '{label}' zurückgesetzt.")
+
+    def _reset_all_class_samples(self):
+        for cid in list(self.exemplar_polygons.keys()):
+            self.exemplar_polygons[cid].clear()
+        for cid in list(self.extracted_layers.keys()):
+            self.extracted_layers[cid].clear()
+        self.sampler._init_defaults()
+        for cid, swatch in self.swatch_boxes.items():
+            sample = self.sampler.get_sample(cid)
+            if sample:
+                swatch.configure(fg_color=sample.hex_color)
+        self._update_active_swatch_display()
+        self._update_counts()
+        self.canvas.redraw()
+        self.lbl_status.configure(text="🗑️ Alle Few-Shot Muster und extrahierten Flächen zurückgesetzt.")
 
     def _activate_class_pipette(self, class_id: str, label: str):
         self.active_pipette_class = class_id
@@ -1417,9 +1464,11 @@ class TranchotDesktopApp(ctk.CTk):
         if sample:
             self._update_active_swatch_display()
             label = sample.label
-            self.lbl_status.configure(text=f"📐 Muster gelernt für '{label}' (Farbe + Textur). Extrahiere Flächen...")
-            self.update_idletasks()
-            threading.Thread(target=self._async_extract_sample, args=(self.active_pipette_class, sample.tolerance), daemon=True).start()
+            count = len(self.exemplar_polygons.get(self.active_pipette_class, []))
+            total_samples = sum(len(v) for v in self.exemplar_polygons.values())
+            self.lbl_status.configure(
+                text=f"📐 Muster #{count} für '{label}' gespeichert ({total_samples} Muster gesamt)! Zeichne weitere Muster oder klicke '⚡ Gelernte Flächen berechnen (OK)'."
+            )
         self.canvas.redraw()
 
     def handle_settlement_polygon(self, polygon_pts: List[Tuple[float, float]]):

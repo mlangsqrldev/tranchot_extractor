@@ -73,6 +73,28 @@ class PipetteSampler:
                 texture_weight=item.get("tex_w", 0.0),
             )
 
+    def reset_class(self, class_id: str):
+        """Resets a single class sample back to default cartographic reference."""
+        for item in self.DEFAULT_CLASSES:
+            if item["class_id"] == class_id:
+                rgb = item["default_rgb"]
+                hsv = list(cv2.cvtColor(np.uint8([[rgb]]), cv2.COLOR_RGB2HSV)[0, 0])
+                lab = list(cv2.cvtColor(np.uint8([[rgb]]), cv2.COLOR_RGB2LAB)[0, 0])
+                self.samples[class_id] = ColorSample(
+                    class_id=class_id,
+                    label=item["label"],
+                    rgb=rgb,
+                    hsv=[int(x) for x in hsv],
+                    lab=[int(x) for x in lab],
+                    hex_color=item["hex"],
+                    tolerance=24,
+                    min_area_px=300.0,
+                    active=False,
+                    sampled_points=[rgb],
+                    texture_weight=item.get("tex_w", 0.0),
+                )
+                break
+
     def sample_from_coordinate(
         self,
         image_rgb: np.ndarray,

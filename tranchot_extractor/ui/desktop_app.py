@@ -397,15 +397,40 @@ class MapCanvas(tk.Canvas):
             self.create_text(bx0 + 6, by0 + 12, text=box_tag, fill=box_color, font=("Segoe UI", 10, "bold"), anchor="w")
 
     def _draw_settlement_boundaries(self):
-        for idx, poly in enumerate(self.app.settlement_boundaries, 1):
-            if not poly or poly.is_empty or not poly.exterior:
-                continue
-            canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
-            flat_pts = [c for pt in canvas_pts for c in pt]
-            if len(flat_pts) >= 6:
-                self.create_polygon(*flat_pts, fill="#8e44ad", outline="#8e44ad", width=3, dash=(6, 3), stipple="gray25")
-                ccx, ccy = self.image_to_canvas_coords(poly.centroid.x, poly.centroid.y)
-                self.create_text(ccx, ccy, text=f"🏘️ Siedlung #{idx}", fill="#8e44ad", font=("Segoe UI", 12, "bold"))
+        if self.app.settlement_records:
+            for idx, rec in enumerate(self.app.settlement_records, 1):
+                poly = rec.get("boundary")
+                if not poly or poly.is_empty or not poly.exterior:
+                    continue
+                name = rec.get("name", f"Siedlung #{idx}")
+                gn_id = rec.get("geonames_id", "")
+                label_txt = f"{name} (ID: {gn_id})" if gn_id else name
+
+                canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
+                flat_pts = [c for pt in canvas_pts for c in pt]
+                if len(flat_pts) >= 6:
+                    self.create_polygon(*flat_pts, fill="#8e44ad", outline="#8e44ad", width=3, dash=(6, 3), stipple="gray25")
+
+                # Central centroid marker & label
+                cx = rec.get("centroid_x", poly.centroid.x)
+                cy = rec.get("centroid_y", poly.centroid.y)
+                ccx, ccy = self.image_to_canvas_coords(cx, cy)
+
+                # Draw town pin marker
+                r = 6
+                self.create_oval(ccx - r, ccy - r, ccx + r, ccy + r, fill="#e74c3c", outline="#ffffff", width=2)
+                self.create_oval(ccx - 2, ccy - 2, ccx + 2, ccy + 2, fill="#ffffff", outline="#ffffff", width=1)
+                self.create_text(ccx + 10, ccy, text=f"📍 {label_txt}", fill="#8e44ad", font=("Segoe UI", 11, "bold"), anchor="w")
+        else:
+            for idx, poly in enumerate(self.app.settlement_boundaries, 1):
+                if not poly or poly.is_empty or not poly.exterior:
+                    continue
+                canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
+                flat_pts = [c for pt in canvas_pts for c in pt]
+                if len(flat_pts) >= 6:
+                    self.create_polygon(*flat_pts, fill="#8e44ad", outline="#8e44ad", width=3, dash=(6, 3), stipple="gray25")
+                    ccx, ccy = self.image_to_canvas_coords(poly.centroid.x, poly.centroid.y)
+                    self.create_text(ccx, ccy, text=f"🏘️ Siedlung #{idx}", fill="#8e44ad", font=("Segoe UI", 12, "bold"))
 
     def _draw_exemplar_polygons(self):
         for cid, polys in self.app.exemplar_polygons.items():
@@ -625,6 +650,126 @@ class ToponymDialog(ctk.CTkToplevel):
         self.destroy()
 
 
+class SettlementDialog(ctk.CTkToplevel):
+    """
+    Modal Dialog to Name a newly drawn settlement, search GeoNames/OSM,
+    and link the centroid Point with Name & GeoNames ID.
+    """
+    def __init__(self, parent, default_name: str, default_id: str, lat: Optional[float], lon: Optional[float], callback):
+        super().__init__(parent)
+        self.title("🏘️ Siedlung benennen & GeoNames Verknüpfung")
+        self.geometry("520x480")
+        self.resizable(False, False)
+        self.callback = callback
+        self.lat = lat
+        self.lon = lon
+
+        self.transient(parent)
+        self.grab_set()
+
+        # Header
+        lbl_h = ctk.CTkLabel(self, text="🏘️ Siedlung benennen & GeoNames", font=ctk.CTkFont(size=16, weight="bold"))
+        lbl_h.pack(padx=20, pady=(15, 4))
+
+        geo_txt = f"📍 Zentroid: {lat:.5f}°N, {lon:.5f}°E (WGS84)" if (lat and lon) else "📍 Zentroid-Punkt im Zentrum des Polygons erfasst"
+        lbl_sub = ctk.CTkLabel(self, text=geo_txt, font=ctk.CTkFont(size=11), text_color="#3498db")
+        lbl_sub.pack(padx=20, pady=(0, 8))
+
+        # Form Frame
+        form_fr = ctk.CTkFrame(self, fg_color="transparent")
+        form_fr.pack(fill="x", padx=20, pady=2)
+
+        ctk.CTkLabel(form_fr, text="Name der Siedlung (Ort / Dorf):", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", pady=(2, 2))
+        self.ent_name = ctk.CTkEntry(form_fr, height=32, font=ctk.CTkFont(size=13))
+        self.ent_name.insert(0, default_name)
+        self.ent_name.pack(fill="x", pady=(0, 6))
+
+        ctk.CTkLabel(form_fr, text="GeoNames / OSM ID:", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", pady=(2, 2))
+        self.ent_id = ctk.CTkEntry(form_fr, height=32, font=ctk.CTkFont(size=13))
+        self.ent_id.insert(0, default_id)
+        self.ent_id.pack(fill="x", pady=(0, 6))
+
+        # Search Action
+        search_fr = ctk.CTkFrame(self, fg_color="transparent")
+        search_fr.pack(fill="x", padx=20, pady=2)
+
+        btn_search = ctk.CTkButton(
+            search_fr,
+            text="🔍 In GeoNames & OSM nach Ort suchen",
+            command=self._do_search,
+            fg_color="#3498db", hover_color="#2980b9",
+            height=30, font=ctk.CTkFont(size=11, weight="bold")
+        )
+        btn_search.pack(fill="x")
+
+        # Search Results Listbox Frame
+        self.res_frame = ctk.CTkScrollableFrame(self, height=130, fg_color=("#F1F5F9", "#1E222B"))
+        self.res_frame.pack(fill="both", expand=True, padx=20, pady=(6, 10))
+        self._populate_results(SpatialGazetteer.search_settlement(default_name, lat=self.lat, lon=self.lon))
+
+        # Bottom Buttons
+        btn_box = ctk.CTkFrame(self, fg_color="transparent")
+        btn_box.pack(fill="x", padx=20, pady=(0, 15))
+
+        btn_ok = ctk.CTkButton(
+            btn_box, text="💾 Speichern & Gebäude extrahieren (OK)",
+            command=self._on_ok,
+            fg_color="#27ae60", hover_color="#2ecc71",
+            height=36, font=ctk.CTkFont(size=12, weight="bold")
+        )
+        btn_ok.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        btn_cancel = ctk.CTkButton(
+            btn_box, text="Abbrechen",
+            command=self.destroy,
+            fg_color="#64748B", hover_color="#EF4444",
+            height=36, width=100
+        )
+        btn_cancel.pack(side="right")
+
+        self.bind("<Return>", lambda e: self._on_ok())
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def _do_search(self):
+        query = self.ent_name.get().strip()
+        matches = SpatialGazetteer.search_settlement(query, lat=self.lat, lon=self.lon)
+        self._populate_results(matches)
+
+    def _populate_results(self, matches: List[Dict[str, Any]]):
+        for child in self.res_frame.winfo_children():
+            child.destroy()
+        if not matches:
+            ctk.CTkLabel(self.res_frame, text="Keine Treffer gefunden. Name und ID können frei eingetragen werden.", font=ctk.CTkFont(size=11), text_color="#64748B").pack(pady=10)
+            return
+
+        for m in matches:
+            name = m.get("name", "")
+            gn_id = str(m.get("geonames_id", ""))
+            row = ctk.CTkFrame(self.res_frame, fg_color=("#FFFFFF", "#262A35"), height=30)
+            row.pack(fill="x", pady=2, padx=4)
+
+            lbl = ctk.CTkLabel(row, text=f"📍 {name}  (GeoNames ID: {gn_id})", font=ctk.CTkFont(size=11, weight="bold"), anchor="w")
+            lbl.pack(side="left", padx=8)
+
+            btn_sel = ctk.CTkButton(
+                row, text="Auswählen", width=80, height=22, font=ctk.CTkFont(size=10),
+                command=lambda n=name, i=gn_id: self._select_match(n, i)
+            )
+            btn_sel.pack(side="right", padx=6, pady=3)
+
+    def _select_match(self, name: str, gn_id: str):
+        self.ent_name.delete(0, "end")
+        self.ent_name.insert(0, name)
+        self.ent_id.delete(0, "end")
+        self.ent_id.insert(0, gn_id)
+
+    def _on_ok(self):
+        name = self.ent_name.get().strip() or "Siedlung"
+        gn_id = self.ent_id.get().strip() or ""
+        self.callback(name, gn_id)
+        self.destroy()
+
+
 class TranchotDesktopApp(ctk.CTk):
     """
     Desktop GIS application with Left Sidebar (Tools & Automation), Right Sidebar (Pipette & De-Yellowing),
@@ -658,6 +803,7 @@ class TranchotDesktopApp(ctk.CTk):
             "forest": [], "meadow": [], "water": [], "gravel": [], "vineyard": [], "garden": []
         }
         self.settlement_boundaries: List[Polygon] = []
+        self.settlement_records: List[Dict[str, Any]] = []
         self.exemplar_polygons: Dict[str, List[Polygon]] = {
             "forest": [], "meadow": [], "water": [], "gravel": [], "vineyard": [], "garden": []
         }
@@ -1478,10 +1624,35 @@ class TranchotDesktopApp(ctk.CTk):
             poly = Polygon(polygon_pts)
             if not poly.is_valid:
                 poly = poly.buffer(0)
-            if poly.is_valid and not poly.is_empty and isinstance(poly, Polygon):
-                self.settlement_boundaries.append(poly)
+            if not poly.is_valid or poly.is_empty or not isinstance(poly, Polygon):
+                return
 
-                # Instant building extraction inside this settlement polygon
+            cx, cy = float(poly.centroid.x), float(poly.centroid.y)
+            lat_lon = SpatialGazetteer.get_lat_lon(self.geo_handler, cx, cy) if self.geo_handler else None
+            lat = lat_lon[0] if lat_lon else None
+            lon = lat_lon[1] if lat_lon else None
+
+            # Get initial default suggestions based on spatial distance / database
+            suggestions = SpatialGazetteer.search_settlement("", lat=lat, lon=lon)
+            def_name = suggestions[0]["name"] if suggestions else f"Siedlung #{len(self.settlement_records) + 1}"
+            def_id = str(suggestions[0]["geonames_id"]) if suggestions else ""
+
+            def on_settlement_named(name: str, geonames_id: str):
+                self.settlement_boundaries.append(poly)
+                settlement_rec = {
+                    "id": len(self.settlement_records) + 1,
+                    "name": name,
+                    "geonames_id": geonames_id,
+                    "centroid_x": cx,
+                    "centroid_y": cy,
+                    "centroid_point": Point(cx, cy),
+                    "boundary": poly,
+                    "lat": lat,
+                    "lon": lon,
+                }
+                self.settlement_records.append(settlement_rec)
+
+                # Automatic Instant Building Extraction inside this Settlement Polygon
                 minx, miny, maxx, maxy = [int(v) for v in poly.bounds]
                 h, w = self.current_np.shape[:2]
                 x0, y0 = max(0, minx), max(0, miny)
@@ -1506,10 +1677,14 @@ class TranchotDesktopApp(ctk.CTk):
                             added_count += 1
 
                     self._update_counts()
+                    id_txt = f" (GeoNames ID: {geonames_id})" if geonames_id else ""
                     self.lbl_status.configure(
-                        text=f"🏘️ Siedlungsgrenze #{len(self.settlement_boundaries)} aktiv: {added_count} Gebäude sofort erkannt!"
+                        text=f"🏘️ Siedlung '{name}'{id_txt} mit {added_count} Gebäuden und Zentroid-Punkt verknüpft!"
                     )
                 self.canvas.redraw()
+
+            SettlementDialog(self, def_name, def_id, lat, lon, on_settlement_named)
+
         except Exception as e:
             self._on_error(f"Siedlung Extraktion Fehler: {e}")
 
@@ -1525,7 +1700,8 @@ class TranchotDesktopApp(ctk.CTk):
 
     def _clear_settlement_boundaries(self):
         self.settlement_boundaries.clear()
-        self.lbl_status.configure(text="Siedlungsgrenzen zurückgesetzt. Gebäude-Extraktion gilt für die gesamte Karte.")
+        self.settlement_records.clear()
+        self.lbl_status.configure(text="Siedlungsgrenzen & Zentroid-Punkte zurückgesetzt. Gebäude-Extraktion gilt für die gesamte Karte.")
         self.canvas.redraw()
 
     def _clear_buildings_layer(self):

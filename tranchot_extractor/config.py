@@ -10,17 +10,17 @@ from typing import List, Tuple, Optional
 class BuildingConfig:
     """Configuration for building footprint, courtyard, and thin wall extraction."""
     # Pure Carmine / Vermilion red HSV ranges
-    hsv_lower_red1: Tuple[int, int, int] = (0, 22, 35)
-    hsv_upper_red1: Tuple[int, int, int] = (18, 255, 255)
-    hsv_lower_red2: Tuple[int, int, int] = (162, 22, 35)
+    hsv_lower_red1: Tuple[int, int, int] = (0, 18, 30)
+    hsv_upper_red1: Tuple[int, int, int] = (22, 255, 255)
+    hsv_lower_red2: Tuple[int, int, int] = (158, 18, 30)
     hsv_upper_red2: Tuple[int, int, int] = (180, 255, 255)
     
     # Differential RGB threshold (R - max(G, B))
-    rgb_diff_threshold: int = 18
-    min_red_intensity: int = 85
+    rgb_diff_threshold: int = 14
+    min_red_intensity: int = 75
     
     # LAB a* channel threshold (green-red axis: isolates deep carmine from brown ink and vineyard terraces)
-    lab_a_threshold: int = 131
+    lab_a_threshold: int = 128
     
     # Morphological filtering & geometric constraints
     morph_kernel_size: int = 1

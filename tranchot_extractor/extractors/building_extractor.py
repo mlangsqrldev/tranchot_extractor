@@ -344,11 +344,11 @@ class BuildingExtractor:
         # LAB a* channel (green-red axis) isolates pure carmine from brown ink and vineyard terraces
         lab_a = lab[:, :, 1]
         lab_b = lab[:, :, 2]
-        m_lab = (lab_a >= self.config.lab_a_threshold) & (lab_a.astype(int) - lab_b.astype(int) >= -6)
+        m_lab = (lab_a >= self.config.lab_a_threshold) & (lab_a.astype(int) - lab_b.astype(int) >= -8)
 
         rgb_diff = self.config.rgb_diff_threshold
-        m_diff = ((r - g >= rgb_diff) & (r - b >= rgb_diff) & (r >= self.config.min_red_intensity)).astype(np.uint8) * 255
-        m_sat = (hsv[:, :, 1] >= 22).astype(np.uint8) * 255
+        m_diff = ((r - g >= rgb_diff) & (r - b >= max(rgb_diff, 16)) & (r >= self.config.min_red_intensity)).astype(np.uint8) * 255
+        m_sat = (hsv[:, :, 1] >= 18).astype(np.uint8) * 255
 
         carmine_mask = cv2.bitwise_and(m_hue, cv2.bitwise_and(m_lab.astype(np.uint8) * 255, cv2.bitwise_and(m_diff, m_sat)))
 
@@ -401,9 +401,21 @@ class BuildingExtractor:
                     if aspect > self.config.max_aspect_ratio:
                         continue
 
-                    # Suppress non-solid hillside hatching
+                    # Suppress vineyard hillside terrace hatching:
+                    # Terraces are thin (min_dim <= 2.2 px), isolated open line slivers with high aspect ratio (aspect >= 4.0)
+                    # and low solidity (solidity < 0.68) without interior courtyard holes.
                     if self.config.filter_vineyard_terraces:
-                        if solidity < 0.35 and aspect > 6.0 and h_elem[2] == -1:
+                        is_vineyard_terrace = (
+                            min_dim <= 2.2 and
+                            aspect >= 4.0 and
+                            solidity < 0.68 and
+                            not has_holes and
+                            h_elem[2] == -1
+                        )
+                        if is_vineyard_terrace:
+                            continue
+
+                        if area < 8.0 and (solidity < 0.60 or min_dim < 1.4):
                             continue
 
                     holes = []

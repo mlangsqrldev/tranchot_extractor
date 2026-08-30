@@ -932,11 +932,11 @@ class TranchotDesktopApp(ctk.CTk):
         )
         btn_bldg_click.pack(fill="x", padx=12, pady=3)
 
-        self.lbl_bldg_diff_header = ctk.CTkLabel(card_bldg, text="Rot-Empfindlichkeit (RGB-Diff = 18):", font=ctk.CTkFont(size=11, weight="bold"))
+        self.lbl_bldg_diff_header = ctk.CTkLabel(card_bldg, text="Rot-Empfindlichkeit (RGB-Diff = 14):", font=ctk.CTkFont(size=11, weight="bold"))
         self.lbl_bldg_diff_header.pack(anchor="w", padx=12, pady=(6, 0))
 
-        self.slider_bldg_diff = ctk.CTkSlider(card_bldg, from_=10, to=45, number_of_steps=35, command=self._on_bldg_diff_changed)
-        self.slider_bldg_diff.set(18)
+        self.slider_bldg_diff = ctk.CTkSlider(card_bldg, from_=8, to=40, number_of_steps=32, command=self._on_bldg_diff_changed)
+        self.slider_bldg_diff.set(14)
         self.slider_bldg_diff.pack(fill="x", padx=12, pady=2)
 
         self.lbl_bldg_min_area = ctk.CTkLabel(card_bldg, text="Mindestfläche (6 px²):", font=ctk.CTkFont(size=11))
@@ -1226,7 +1226,7 @@ class TranchotDesktopApp(ctk.CTk):
             self.lbl_bldg_min_area.configure(text=f"Mindestfläche ({int(val)} px²):")
 
     def _get_current_building_config(self) -> BuildingConfig:
-        rgb_diff = int(self.slider_bldg_diff.get()) if hasattr(self, "slider_bldg_diff") else 18
+        rgb_diff = int(self.slider_bldg_diff.get()) if hasattr(self, "slider_bldg_diff") else 14
         min_area = float(self.slider_bldg_area.get()) if hasattr(self, "slider_bldg_area") else 6.0
         filter_terraces = self.cb_filter_terraces_var.get() if hasattr(self, "cb_filter_terraces_var") else True
         regularize_rect = self.cb_regularize_rect_var.get() if hasattr(self, "cb_regularize_rect_var") else True
@@ -1238,7 +1238,7 @@ class TranchotDesktopApp(ctk.CTk):
             filter_vineyard_terraces=filter_terraces,
             regularize_orthogonal=regularize_rect or regularize_ortho,
             min_stroke_width_px=1.0,
-            lab_a_threshold=131,
+            lab_a_threshold=128,
         )
 
     def _set_active_tool(self, tool_name: str):

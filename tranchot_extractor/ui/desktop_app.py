@@ -1696,7 +1696,40 @@ class TranchotDesktopApp(ctk.CTk):
                 text="ℹ️ Keine Siedlungsgrenze aktiv. Klicke auf '🏘️ Siedlungs-Grenze zeichnen', um das Dorf einzugrenzen!"
             )
             return
-        self._run_auto_buildings()
+
+        self.lbl_status.configure(text="Extrahiere Gebäude innerhalb der Siedlungsgrenzen...")
+        self.update_idletasks()
+
+        cfg = self._get_current_building_config()
+        extractor = BuildingExtractor(cfg)
+        t0 = time.time()
+        result = extractor.extract(self.current_np, settlement_boundaries=self.settlement_boundaries)
+        elapsed = time.time() - t0
+
+        self.extracted_buildings = [f.geometry for f in result.features]
+        self.selected_building_idx = None
+        self._update_counts()
+        self.canvas.redraw()
+        self.lbl_status.configure(text=f"Fertig in {elapsed:.2f}s: {len(self.extracted_buildings)} Gebäude in Siedlung extrahiert!")
+
+    def _run_auto_buildings(self):
+        if self.current_np is None:
+            return
+
+        self.lbl_status.configure(text="Extrahiere alle Gebäude & Hofanlagen der gesamten Karte...")
+        self.update_idletasks()
+
+        cfg = self._get_current_building_config()
+        extractor = BuildingExtractor(cfg)
+        t0 = time.time()
+        result = extractor.extract(self.current_np, settlement_boundaries=None)
+        elapsed = time.time() - t0
+
+        self.extracted_buildings = [f.geometry for f in result.features]
+        self.selected_building_idx = None
+        self._update_counts()
+        self.canvas.redraw()
+        self.lbl_status.configure(text=f"Fertig in {elapsed:.2f}s: {len(self.extracted_buildings)} echte Gebäude & Höfe extrahiert!")
 
     def _clear_settlement_boundaries(self):
         self.settlement_boundaries.clear()
@@ -1711,25 +1744,6 @@ class TranchotDesktopApp(ctk.CTk):
         self._update_counts()
         self.canvas.redraw()
         self.lbl_status.configure(text=f"🧹 Gebäude-Layer geleert ({count} Gebäude entfernt).")
-
-    def _run_auto_buildings(self):
-        if self.current_np is None:
-            return
-
-        self.lbl_status.configure(text="Extrahiere alle Gebäude & Hofanlagen der Karte...")
-        self.update_idletasks()
-
-        cfg = self._get_current_building_config()
-        extractor = BuildingExtractor(cfg)
-        t0 = time.time()
-        result = extractor.extract(self.current_np, settlement_boundaries=self.settlement_boundaries)
-        elapsed = time.time() - t0
-
-        self.extracted_buildings = [f.geometry for f in result.features]
-        self.selected_building_idx = None
-        self._update_counts()
-        self.canvas.redraw()
-        self.lbl_status.configure(text=f"Fertig in {elapsed:.2f}s: {len(self.extracted_buildings)} echte Gebäude & Höfe extrahiert!")
 
     def handle_building_roi_box(self, ix0: float, iy0: float, ix1: float, iy1: float):
         if self.current_np is None:

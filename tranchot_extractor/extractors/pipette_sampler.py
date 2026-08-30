@@ -19,7 +19,7 @@ from shapely.geometry import Polygon
 
 @dataclass
 class ColorSample:
-    """Represents a sampled color class from the map with multi-point support and texture profiling."""
+    """Represents a sampled color class from the map with multi-point support and full texture/pattern profiling."""
     class_id: str
     label: str
     rgb: List[int]
@@ -31,6 +31,12 @@ class ColorSample:
     active: bool = True
     sampled_points: List[List[int]] = field(default_factory=list)
     texture_weight: float = 0.0  # >0: wants texture (forest), <0: wants smoothness (meadow/water)
+    lab_std: List[float] = field(default_factory=lambda: [8.0, 4.0, 4.0])
+    tex_energy_mean: float = 18.0
+    tex_energy_std: float = 8.0
+    dir_coherence_mean: float = 0.5
+    dir_coherence_std: float = 0.15
+    has_pattern_profile: bool = False
 
 
 class PipetteSampler:
@@ -71,6 +77,8 @@ class PipetteSampler:
                 active=False,
                 sampled_points=[rgb],
                 texture_weight=item.get("tex_w", 0.0),
+                lab_std=[8.0, 4.0, 4.0],
+                has_pattern_profile=False,
             )
 
     def reset_class(self, class_id: str):
@@ -92,6 +100,8 @@ class PipetteSampler:
                     active=False,
                     sampled_points=[rgb],
                     texture_weight=item.get("tex_w", 0.0),
+                    lab_std=[8.0, 4.0, 4.0],
+                    has_pattern_profile=False,
                 )
                 break
 
@@ -122,21 +132,20 @@ class PipetteSampler:
         new_pt = [int(med_rgb[0]), int(med_rgb[1]), int(med_rgb[2])]
 
         existing = self.samples.get(class_id)
-        if existing and append_sample and len(existing.sampled_points) > 0:
+        if existing and append_sample and existing.sampled_points:
             pts = existing.sampled_points + [new_pt]
+            pts_arr = np.array(pts)
+            mean_rgb = np.mean(pts_arr, axis=0).astype(int).tolist()
         else:
             pts = [new_pt]
-
-        # Calculate mean RGB across all sampled points for this class
-        pts_arr = np.array(pts, dtype=np.float32)
-        mean_rgb = np.mean(pts_arr, axis=0).astype(int).tolist()
+            mean_rgb = new_pt
 
         hsv = list(cv2.cvtColor(np.uint8([[mean_rgb]]), cv2.COLOR_RGB2HSV)[0, 0])
         lab = list(cv2.cvtColor(np.uint8([[mean_rgb]]), cv2.COLOR_RGB2LAB)[0, 0])
         hex_col = "#{:02x}{:02x}{:02x}".format(mean_rgb[0], mean_rgb[1], mean_rgb[2])
 
         label = existing.label if existing else class_id
-        tol = existing.tolerance if existing else 24
+        min_area = existing.min_area_px if existing else 300.0
         tex_w = existing.texture_weight if existing else 0.0
 
         sample = ColorSample(
@@ -146,10 +155,13 @@ class PipetteSampler:
             hsv=[int(x) for x in hsv],
             lab=[int(x) for x in lab],
             hex_color=hex_col,
-            tolerance=tol,
+            tolerance=existing.tolerance if existing else 24,
+            min_area_px=min_area,
             active=True,
             sampled_points=pts,
             texture_weight=tex_w,
+            lab_std=[8.0, 4.0, 4.0],
+            has_pattern_profile=False,
         )
         self.samples[class_id] = sample
         return sample
@@ -162,7 +174,7 @@ class PipetteSampler:
     ) -> ColorSample:
         """
         Extracts multi-point pixel and texture distribution inside a user-drawn polygon.
-        Calculates LAB centroid, covariance, and texture roughness.
+        Calculates LAB centroid, covariance, and full texture energy + directional hatching metrics.
         """
         h, w = image_rgb.shape[:2]
         poly_np = np.array(polygon_pts, dtype=np.int32)
@@ -175,32 +187,52 @@ class PipetteSampler:
 
         mean_rgb = np.mean(inside_pixels, axis=0).astype(int).tolist()
         hsv = list(cv2.cvtColor(np.uint8([[mean_rgb]]), cv2.COLOR_RGB2HSV)[0, 0])
-        lab = list(cv2.cvtColor(np.uint8([[mean_rgb]]), cv2.COLOR_RGB2LAB)[0, 0])
         hex_col = "#{:02x}{:02x}{:02x}".format(mean_rgb[0], mean_rgb[1], mean_rgb[2])
 
-        # Compute texture variance inside the polygon
+        # Multi-dimensional texture & directional hatching computation
         gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
-        blur_g = cv2.GaussianBlur(gray, (13, 13), 0)
-        local_var = cv2.GaussianBlur((gray - blur_g) ** 2, (13, 13), 0)
-        poly_var = float(np.mean(local_var[poly_mask > 0]))
+        lab_img = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
 
-        tex_w = max(-1.2, min(1.5, (poly_var - 35.0) / 30.0))
+        inside_lab = lab_img[poly_mask > 0]
+        mean_lab = np.mean(inside_lab, axis=0).astype(int).tolist()
+        std_lab = np.maximum(np.std(inside_lab, axis=0), 2.5).tolist()
+
+        # 1. Texture Energy (Laplacian frequency energy)
+        lap = np.abs(cv2.Laplacian(gray, cv2.CV_32F, ksize=3))
+        tex_energy = cv2.GaussianBlur(lap, (15, 15), 0)
+        inside_tex = tex_energy[poly_mask > 0]
+        mu_tex = float(np.mean(inside_tex))
+        sigma_tex = max(float(np.std(inside_tex)), 2.0)
+
+        # 2. Directional Hatching Coherence (Slope / Vineyard orientation)
+        gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        dir_coh = cv2.GaussianBlur(np.abs(gx**2 - gy**2) / (gx**2 + gy**2 + 1e-4), (15, 15), 0)
+        inside_dir = dir_coh[poly_mask > 0]
+        mu_dir = float(np.mean(inside_dir))
+        sigma_dir = max(float(np.std(inside_dir)), 0.05)
 
         existing = self.samples.get(class_id)
         label = existing.label if existing else class_id
-        tol = max(18, min(36, int(np.std(inside_pixels))))
+        tol = max(18, min(36, int(np.mean(std_lab) * 3.5)))
 
         sample = ColorSample(
             class_id=class_id,
             label=label,
             rgb=mean_rgb,
             hsv=[int(x) for x in hsv],
-            lab=[int(x) for x in lab],
+            lab=mean_lab,
             hex_color=hex_col,
             tolerance=tol,
             active=True,
             sampled_points=[mean_rgb],
-            texture_weight=tex_w,
+            texture_weight=mu_tex,
+            lab_std=[float(x) for x in std_lab],
+            tex_energy_mean=mu_tex,
+            tex_energy_std=sigma_tex,
+            dir_coherence_mean=mu_dir,
+            dir_coherence_std=sigma_dir,
+            has_pattern_profile=True,
         )
         self.samples[class_id] = sample
         return sample
@@ -211,7 +243,7 @@ class PipetteSampler:
         active_class_ids: Optional[List[str]] = None
     ) -> Dict[str, List[Polygon]]:
         """
-        Runs competitive multi-class texture-aware segmentation.
+        Runs competitive multi-class pattern-aware and texture-aware segmentation.
         Every pixel is assigned to its best-matching active class via argmin distance.
         Guarantees zero overlap and zero conflicting polygon boundaries between classes.
         """
@@ -224,7 +256,7 @@ class PipetteSampler:
 
         h, w = image_rgb.shape[:2]
 
-        # 1. Multi-scale Pyramidal Downsampling for 100x Speedup
+        # 1. Multi-scale Pyramidal Downsampling for Speedup
         max_dim = max(h, w)
         if max_dim > 1800:
             scale_factor = 1800.0 / max_dim
@@ -239,21 +271,33 @@ class PipetteSampler:
         gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY).astype(np.float32)
         lab = cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32)
 
-        blur_g = cv2.GaussianBlur(gray, (13, 13), 0)
-        local_var = cv2.GaussianBlur((gray - blur_g) ** 2, (13, 13), 0)
-        tex_norm = (local_var - 35.0) / 25.0  # normalized texture response
+        lap = np.abs(cv2.Laplacian(gray, cv2.CV_32F, ksize=3))
+        tex_energy = cv2.GaussianBlur(lap, (15, 15), 0)
 
-        # 3. Compute Distance Volume
+        gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        dir_coh = cv2.GaussianBlur(np.abs(gx**2 - gy**2) / (gx**2 + gy**2 + 1e-4), (15, 15), 0)
+
+        # 3. Compute Distance Volume with Mahalanobis & Texture matching
         dist_maps = []
         for sample in active_classes:
-            target_lab = np.array(sample.lab, dtype=np.float32)
-            dl = (lab[:, :, 0] - target_lab[0]) * 0.45
-            da = (lab[:, :, 1] - target_lab[1]) * 1.8
-            db = (lab[:, :, 2] - target_lab[2]) * 1.8
-            col_dist = np.sqrt(dl**2 + da**2 + db**2)
+            mu_l, mu_a, mu_b = sample.lab
+            sig_l, sig_a, sig_b = sample.lab_std if hasattr(sample, 'lab_std') and sample.lab_std else [8.0, 4.0, 4.0]
 
-            # Apply texture weight
-            total_dist = col_dist - (sample.texture_weight * tex_norm * 8.0)
+            d_col = np.sqrt(
+                ((lab[:, :, 0] - mu_l) / sig_l) ** 2 +
+                ((lab[:, :, 1] - mu_a) / sig_a) ** 2 +
+                ((lab[:, :, 2] - mu_b) / sig_b) ** 2
+            )
+
+            if getattr(sample, 'has_pattern_profile', False):
+                d_tex = np.abs(tex_energy - sample.tex_energy_mean) / sample.tex_energy_std
+                d_dir = np.abs(dir_coh - sample.dir_coherence_mean) / sample.dir_coherence_std
+                total_dist = d_col + (1.2 * d_tex) + (0.8 * d_dir)
+            else:
+                tex_norm = (tex_energy - 18.0) / 10.0
+                total_dist = d_col - (sample.texture_weight * tex_norm * 0.4)
+
             dist_maps.append(total_dist)
 
         dist_stack = np.stack(dist_maps, axis=2)
@@ -264,14 +308,12 @@ class PipetteSampler:
         results: Dict[str, List[Polygon]] = {}
 
         for idx, sample in enumerate(active_classes):
-            # Class mask: won the competition AND within maximum distance tolerance
-            c_mask = ((winner_idx == idx) & (min_dists <= sample.tolerance * 1.6)).astype(np.uint8) * 255
+            c_mask = ((winner_idx == idx) & (min_dists <= 4.2)).astype(np.uint8) * 255
 
             if np.count_nonzero(c_mask) == 0:
                 results[sample.class_id] = []
                 continue
 
-            # Ink-bridging (closes across hachures, tree stamps, letters)
             k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
             mask_closed = cv2.morphologyEx(c_mask, cv2.MORPH_CLOSE, k_close)
             mask_clean = cv2.morphologyEx(mask_closed, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
@@ -299,7 +341,7 @@ class PipetteSampler:
         tolerance_override: Optional[int] = None
     ) -> List[Polygon]:
         """
-        Extracts polygons for a single class. Uses competitive classification if other classes are active.
+        Extracts polygons for a single class using Mahalanobis Color + Texture Energy + Directional Coherence.
         """
         active_ids = [k for k, v in self.samples.items() if v.active]
         if len(active_ids) > 1 and class_id in active_ids:
@@ -310,8 +352,6 @@ class PipetteSampler:
             return []
 
         sample = self.samples[class_id]
-        tol = tolerance_override if tolerance_override is not None else sample.tolerance
-
         h, w = image_rgb.shape[:2]
         max_dim = max(h, w)
         scale_factor = (1800.0 / max_dim) if max_dim > 1800 else 1.0
@@ -320,17 +360,34 @@ class PipetteSampler:
 
         gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY).astype(np.float32)
         lab = cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32)
-        blur_g = cv2.GaussianBlur(gray, (13, 13), 0)
-        local_var = cv2.GaussianBlur((gray - blur_g) ** 2, (13, 13), 0)
-        tex_norm = (local_var - 35.0) / 25.0
 
-        target_lab = np.array(sample.lab, dtype=np.float32)
-        dl = (lab[:, :, 0] - target_lab[0]) * 0.45
-        da = (lab[:, :, 1] - target_lab[1]) * 1.8
-        db = (lab[:, :, 2] - target_lab[2]) * 1.8
-        dist = np.sqrt(dl**2 + da**2 + db**2) - (sample.texture_weight * tex_norm * 8.0)
+        lap = np.abs(cv2.Laplacian(gray, cv2.CV_32F, ksize=3))
+        tex_energy = cv2.GaussianBlur(lap, (15, 15), 0)
 
-        mask_raw = (dist <= float(tol))
+        gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        dir_coh = cv2.GaussianBlur(np.abs(gx**2 - gy**2) / (gx**2 + gy**2 + 1e-4), (15, 15), 0)
+
+        mu_l, mu_a, mu_b = sample.lab
+        sig_l, sig_a, sig_b = sample.lab_std if hasattr(sample, 'lab_std') and sample.lab_std else [8.0, 4.0, 4.0]
+
+        d_col = np.sqrt(
+            ((lab[:, :, 0] - mu_l) / sig_l) ** 2 +
+            ((lab[:, :, 1] - mu_a) / sig_a) ** 2 +
+            ((lab[:, :, 2] - mu_b) / sig_b) ** 2
+        )
+
+        if getattr(sample, 'has_pattern_profile', False):
+            d_tex = np.abs(tex_energy - sample.tex_energy_mean) / sample.tex_energy_std
+            d_dir = np.abs(dir_coh - sample.dir_coherence_mean) / sample.dir_coherence_std
+            dist = d_col + (1.2 * d_tex) + (0.8 * d_dir)
+            thresh = 4.0
+        else:
+            tex_norm = (tex_energy - 18.0) / 10.0
+            dist = d_col - (sample.texture_weight * tex_norm * 0.4)
+            thresh = 3.5
+
+        mask_raw = (dist <= thresh)
         k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
         mask_closed = cv2.morphologyEx(mask_raw.astype(np.uint8) * 255, cv2.MORPH_CLOSE, k_close)
         mask_clean = cv2.morphologyEx(mask_closed, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
@@ -348,6 +405,9 @@ class PipetteSampler:
                         polys.append(p_geom.simplify(2.0, preserve_topology=True))
 
         return polys
+
+    def get_sample(self, class_id: str) -> Optional[ColorSample]:
+        return self.samples.get(class_id)
 
     def save_palette(self, file_path: str):
         """Saves calibration palette to JSON file."""

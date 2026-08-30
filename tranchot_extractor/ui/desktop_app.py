@@ -1,12 +1,13 @@
 """
 Tranchot Map Feature Extractor — Intuitive Desktop GIS Application.
 Features:
+- Adaptive Light (Default) & Dark Appearance Modes.
 - Left Sidebar: Map loading, fast automatic extractors, tool selection, layer toggles, user-defined Output EPSG (default EPSG:25832), GIS export with fixed historical colors.
 - Right Sidebar:
   * ✨ 0. Weißabgleich & Entgilbung (Parchment de-yellowing & watercolor radiance boost).
   * 🎨 Blatt-Kalibrierung & Pipetten mit feinem Farbabstand (2..25, default 8).
-- Canvas Topbar: One-click live toggle between Original / Restaurierte Karte.
-- Multi-layer GIS export with defined CRS and historical color attributes.
+  * 🏛️ 2. Gebäude & Hofanlagen mit 90°-Orthogonal-Regularisierung und zackenfreier Trennung.
+- Canvas Topbar: Live appearance mode switcher (☀️ Hell / 🌙 Dunkel), one-click view toggle.
 - 100% local, instant execution (< 0.15s).
 """
 
@@ -20,7 +21,6 @@ if hasattr(sys.stdout, "reconfigure") and sys.stdout.encoding != 'utf-8':
 import os
 import time
 import threading
-import difflib
 from typing import List, Dict, Any, Optional, Tuple
 
 import numpy as np
@@ -33,21 +33,33 @@ from tkinter import filedialog, messagebox
 from shapely.geometry import Polygon, LineString, Point
 from shapely.affinity import translate
 import geopandas as gpd
-from pyproj import Transformer
 
-from tranchot_extractor.config import BuildingConfig, RoadConfig, TextConfig, LandUseConfig
+from tranchot_extractor.config import BuildingConfig, RoadConfig, LandUseConfig
 from tranchot_extractor.preprocessing.color_enhancer import ColorEnhancer
 from tranchot_extractor.extractors.building_extractor import BuildingExtractor
 from tranchot_extractor.extractors.road_extractor import RoadExtractor
 from tranchot_extractor.extractors.text_extractor import TextExtractor
 from tranchot_extractor.extractors.landuse_extractor import LandUseExtractor
-from tranchot_extractor.extractors.pipette_sampler import PipetteSampler, ColorSample
+from tranchot_extractor.extractors.pipette_sampler import PipetteSampler
 from tranchot_extractor.geo.georeference import GeoReferenceHandler
 from tranchot_extractor.geo.spatial_gazetteer import SpatialGazetteer
 
-ctk.set_appearance_mode("Dark")
+# Default to Light Mode as requested
+ctk.set_appearance_mode("Light")
 ctk.set_default_color_theme("blue")
 
+# Theme color definitions (Light, Dark)
+THEME_SIDEBAR_FG = ("#F8F9FA", "#181A20")
+THEME_MAIN_FG = ("#EEF2F6", "#111317")
+THEME_TOPBAR_FG = ("#FFFFFF", "#1E2028")
+THEME_STATUSBAR_FG = ("#F1F5F9", "#14161B")
+THEME_CARD_FG = ("#FFFFFF", "#20232B")
+THEME_CARD_BORDER = ("#E2E8F0", "#2D3139")
+THEME_TEXT_MAIN = ("#0F172A", "#F8FAFC")
+THEME_TEXT_MUTED = ("#64748B", "#94A3B8")
+THEME_TEXT_SECTION = ("#1D4ED8", "#60A5FA")
+THEME_SWATCH_FRAME = ("#F1F5F9", "#262A35")
+THEME_INPUT_FG = ("#F8FAFC", "#1E2028")
 
 # Fixed historical cartographic colors for layers & GIS export
 LAYER_COLOR_SPECS = {
@@ -66,10 +78,12 @@ LAYER_COLOR_SPECS = {
 class MapCanvas(tk.Canvas):
     """
     High-performance map canvas with mousewheel zoom, drag-pan, and multi-layer rendering.
+    Supports dynamic Light & Dark themes.
     """
     def __init__(self, parent, app, **kwargs):
-        super().__init__(parent, bg="#121317", highlightthickness=0, **kwargs)
         self.app = app
+        bg_col = self._get_theme_canvas_bg()
+        super().__init__(parent, bg=bg_col, highlightthickness=0, **kwargs)
 
         self.pil_image: Optional[Image.Image] = None
         self.np_image: Optional[np.ndarray] = None
@@ -105,6 +119,14 @@ class MapCanvas(tk.Canvas):
 
         self.bind("<Motion>", self._on_mouse_move)
         self.bind("<Configure>", lambda e: self.redraw())
+
+    def _get_theme_canvas_bg(self) -> str:
+        mode = ctk.get_appearance_mode().lower()
+        return "#E5E7EB" if mode == "light" else "#121317"
+
+    def update_theme(self):
+        self.configure(bg=self._get_theme_canvas_bg())
+        self.redraw()
 
     def load_image(self, pil_img: Image.Image, np_img: np.ndarray):
         self.pil_image = pil_img
@@ -167,7 +189,7 @@ class MapCanvas(tk.Canvas):
             self.app.handle_pipette_sample_at(ix, iy)
             return
 
-        if self.app.active_tool in ("toponym", "bldg_box"):
+        if self.app.active_tool in ("toponym", "bldg_box", "landuse_box"):
             self.box_start_x = event.x
             self.box_start_y = event.y
             self.drag_current_x = event.x
@@ -185,7 +207,7 @@ class MapCanvas(tk.Canvas):
     def _on_left_drag(self, event):
         if self.app.active_tool == "pan":
             self._on_pan_drag(event)
-        elif self.app.active_tool in ("toponym", "bldg_box") and self.is_dragging_box:
+        elif self.app.active_tool in ("toponym", "bldg_box", "landuse_box") and self.is_dragging_box:
             self.drag_current_x = event.x
             self.drag_current_y = event.y
             self.redraw()
@@ -231,10 +253,12 @@ class MapCanvas(tk.Canvas):
     def redraw(self):
         self.delete("all")
         if not self.pil_image:
+            mode = ctk.get_appearance_mode().lower()
+            txt_col = "#64748B" if mode == "light" else "#94A3B8"
             self.create_text(
                 self.winfo_width() / 2, self.winfo_height() / 2,
                 text="🏛️ Bitte lade eine historische Karte (GeoTIFF / PNG / JPG)...",
-                fill="gray50", font=("Segoe UI", 14)
+                fill=txt_col, font=("Segoe UI", 14, "bold")
             )
             return
 
@@ -250,116 +274,115 @@ class MapCanvas(tk.Canvas):
 
         if x1_img > x0_img and y1_img > y0_img:
             crop = self.pil_image.crop((x0_img, y0_img, x1_img, y1_img))
-            tw = max(1, int((x1_img - x0_img) * self.scale))
-            th = max(1, int((y1_img - y0_img) * self.scale))
-            resample_mode = Image.Resampling.NEAREST if self.scale > 2.5 else Image.Resampling.BILINEAR
-            resized = crop.resize((tw, th), resample_mode)
-            self.tk_image = ImageTk.PhotoImage(resized)
+            dw = int((x1_img - x0_img) * self.scale)
+            dh = int((y1_img - y0_img) * self.scale)
+            if dw > 0 and dh > 0:
+                resample_filter = Image.Resampling.NEAREST if self.scale > 2.0 else Image.Resampling.BILINEAR
+                resized = crop.resize((dw, dh), resample_filter)
+                self.tk_image = ImageTk.PhotoImage(resized)
+                pos_x = x0_img * self.scale + self.pan_x
+                pos_y = y0_img * self.scale + self.pan_y
+                self.create_image(pos_x, pos_y, anchor="nw", image=self.tk_image)
 
-            cx_pos = x0_img * self.scale + self.pan_x
-            cy_pos = y0_img * self.scale + self.pan_y
-            self.create_image(cx_pos, cy_pos, anchor="nw", image=self.tk_image)
-
-        # 1. Draw Land-Use & Custom Sampled Layers
+        # Draw Layers
         if self.app.show_forests_var.get():
-            self._draw_generic_polygons(self.app.extracted_layers.get("forest", []), fill_col="#27ae60", outline_col="#2ecc71", stipple="gray25")
-
+            self._draw_polygons(self.app.extracted_layers.get("forest", []), LAYER_COLOR_SPECS["forest"])
         if self.app.show_meadows_var.get():
-            self._draw_generic_polygons(self.app.extracted_layers.get("meadow", []), fill_col="#00cec9", outline_col="#81ecec", stipple="gray25")
-
+            self._draw_polygons(self.app.extracted_layers.get("meadow", []), LAYER_COLOR_SPECS["meadow"])
         if self.app.show_water_var.get():
-            self._draw_generic_polygons(self.app.extracted_layers.get("water", []), fill_col="#0984e3", outline_col="#74b9ff", stipple="")
-
+            self._draw_polygons(self.app.extracted_layers.get("water", []), LAYER_COLOR_SPECS["water"])
         if self.app.show_gravel_var.get():
-            self._draw_generic_polygons(self.app.extracted_layers.get("gravel", []), fill_col="#e17055", outline_col="#fab1a0", stipple="gray25")
-
+            self._draw_polygons(self.app.extracted_layers.get("gravel", []), LAYER_COLOR_SPECS["gravel"])
         if self.app.show_vineyard_var.get():
-            self._draw_generic_polygons(self.app.extracted_layers.get("vineyard", []), fill_col="#f1c40f", outline_col="#f39c12", stipple="gray25")
-
+            self._draw_polygons(self.app.extracted_layers.get("vineyard", []), LAYER_COLOR_SPECS["vineyard"])
         if self.app.show_garden_var.get():
-            self._draw_generic_polygons(self.app.extracted_layers.get("garden", []), fill_col="#fdcb6e", outline_col="#ffeaa7", stipple="gray25")
+            self._draw_polygons(self.app.extracted_layers.get("garden", []), LAYER_COLOR_SPECS["garden"])
 
-        # 2. Draw Road Network Layer
         if self.app.show_roads_var.get():
-            self._draw_road_centerlines()
-
-        # 3. Draw Building Footprints & Courtyards Layer
+            self._draw_roads()
         if self.app.show_bldgs_var.get():
-            self._draw_building_polygons()
-
-        # 4. Draw Toponyms / Text Layer
+            self._draw_buildings()
         if self.app.show_toponyms_var.get():
             self._draw_toponym_labels()
 
-        # 5. Draw active road start marker if in road snap mode
+        # Temporary road snapping point
         if self.app.road_start_pt is not None:
-            cx, cy = self.image_to_canvas_coords(self.app.road_start_pt[0], self.app.road_start_pt[1])
-            self.create_oval(cx - 6, cy - 6, cx + 6, cy + 6, fill="#00cec9", outline="#ffffff", width=2)
+            cx, cy = self.image_to_canvas_coords(*self.app.road_start_pt)
+            self.create_oval(cx - 6, cy - 6, cx + 6, cy + 6, fill="#e74c3c", outline="#ffffff", width=2)
+            self.create_text(cx + 10, cy, text="Startpunkt", fill="#e74c3c", font=("Segoe UI", 10, "bold"), anchor="w")
 
-        # 6. Draw live dragging box for text selection or building ROI test
+        # Interactive Drag Box
         if self.is_dragging_box:
-            bx0, by0 = min(self.box_start_x, self.drag_current_x), min(self.box_start_y, self.drag_current_y)
-            bx1, by1 = max(self.box_start_x, self.drag_current_x), max(self.box_start_y, self.drag_current_y)
+            bx0 = min(self.box_start_x, self.drag_current_x)
+            by0 = min(self.box_start_y, self.drag_current_y)
+            bx1 = max(self.box_start_x, self.drag_current_x)
+            by1 = max(self.box_start_y, self.drag_current_y)
+            
             if self.app.active_tool == "bldg_box":
-                self.create_rectangle(bx0, by0, bx1, by1, outline="#e74c3c", width=2, dash=(6, 3))
-                self.create_text(bx0 + 8, by0 + 12, text="🏛️ Gebäude ROI-Test", anchor="w", fill="#e74c3c", font=("Segoe UI", 9, "bold"))
+                box_color = "#e74c3c"
+                box_tag = "📐 Gebäude ROI-Box"
             elif self.app.active_tool == "landuse_box":
-                self.create_rectangle(bx0, by0, bx1, by1, outline="#2ecc71", width=2, dash=(6, 3))
-                self.create_text(bx0 + 8, by0 + 12, text="🌲 Flächen ROI-Test (Wettbewerb)", anchor="w", fill="#2ecc71", font=("Segoe UI", 9, "bold"))
+                box_color = "#27ae60"
+                box_tag = "🌲 Flächen ROI-Box"
             else:
-                self.create_rectangle(bx0, by0, bx1, by1, outline="#00cec9", width=2, dash=(4, 2))
+                box_color = "#00cec9"
+                box_tag = "🏷️ Toponym ROI-Box"
 
-    def _draw_generic_polygons(self, polys: List[Polygon], fill_col: str, outline_col: str, stipple: str = ""):
-        for poly in polys:
-            if not isinstance(poly, Polygon) or poly.is_empty:
+            self.create_rectangle(bx0, by0, bx1, by1, outline=box_color, width=2, dash=(4, 2))
+            self.create_text(bx0 + 6, by0 + 12, text=box_tag, fill=box_color, font=("Segoe UI", 10, "bold"), anchor="w")
+
+    def _draw_polygons(self, polygons: List[Polygon], spec: Dict[str, str]):
+        fill_col = spec["fill"]
+        stroke_col = spec["stroke"]
+        for poly in polygons:
+            if not poly or poly.is_empty or not poly.exterior:
                 continue
-            pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
-            flat_pts = [c for pt in pts for c in pt]
+            canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
+            flat_pts = [c for pt in canvas_pts for c in pt]
             if len(flat_pts) >= 6:
-                kwargs = {"fill": fill_col, "outline": outline_col, "width": 1.5}
-                if stipple:
-                    kwargs["stipple"] = stipple
-                self.create_polygon(*flat_pts, **kwargs)
+                self.create_polygon(*flat_pts, fill="", outline=stroke_col, width=1.5)
 
-    def _draw_road_centerlines(self):
+    def _draw_roads(self):
         for idx, line in enumerate(self.app.extracted_roads):
-            if not isinstance(line, LineString) or line.is_empty or len(line.coords) < 2:
+            if not line or line.is_empty:
                 continue
-            pts = [self.image_to_canvas_coords(x, y) for x, y in line.coords]
-            flat_pts = [c for pt in pts for c in pt]
+            is_selected = (self.app.selected_road_idx == idx)
+            stroke_col = "#f1c40f" if is_selected else LAYER_COLOR_SPECS["road"]["stroke"]
+            width = 3.5 if is_selected else 2.0
+            canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in line.coords]
+            flat_pts = [c for pt in canvas_pts for c in pt]
             if len(flat_pts) >= 4:
-                is_selected = (self.app.selected_road_idx == idx)
-                line_col = "#f1c40f" if is_selected else "#ff793f"
-                line_w = 4.0 if is_selected else 3.0
-                self.create_line(*flat_pts, fill=line_col, width=line_w, capstyle="round", joinstyle="round")
+                self.create_line(*flat_pts, fill=stroke_col, width=width, capstyle="round", joinstyle="round")
 
-    def _draw_building_polygons(self):
+    def _draw_buildings(self):
+        mode = ctk.get_appearance_mode().lower()
+        hole_fill = "#E5E7EB" if mode == "light" else "#121317"
+
         for idx, poly in enumerate(self.app.extracted_buildings):
-            if not isinstance(poly, Polygon) or poly.is_empty:
+            if not poly or poly.is_empty or not poly.exterior:
                 continue
+            is_selected = (self.app.selected_building_idx == idx)
+            stroke_col = "#f1c40f" if is_selected else LAYER_COLOR_SPECS["building"]["stroke"]
+            fill_col = "#e74c3c"
+            width = 2.5 if is_selected else 1.5
 
-            pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
-            flat_pts = [c for pt in pts for c in pt]
+            canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
+            flat_pts = [c for pt in canvas_pts for c in pt]
             if len(flat_pts) >= 6:
-                is_selected = (idx == self.app.selected_building_idx)
-                outline_col = "#f1c40f" if is_selected else "#ff4757"
-                fill_col = "#f39c12" if is_selected else "#e74c3c"
-                line_w = 2.5 if is_selected else 1.5
-
-                self.create_polygon(*flat_pts, fill=fill_col, outline=outline_col, width=line_w, stipple="gray25")
+                self.create_polygon(*flat_pts, fill=fill_col, outline=stroke_col, width=width, stipple="gray50")
 
             for interior in poly.interiors:
                 hole_pts = [self.image_to_canvas_coords(x, y) for x, y in interior.coords]
                 flat_hole = [c for pt in hole_pts for c in pt]
                 if len(flat_hole) >= 6:
-                    self.create_polygon(*flat_hole, fill="#121317", outline="#00cec9", width=1.0)
+                    self.create_polygon(*flat_hole, fill=hole_fill, outline="#00cec9", width=1.0)
 
     def _draw_toponym_labels(self):
         for idx, top in enumerate(self.app.extracted_toponyms):
             cx, cy = self.image_to_canvas_coords(top["x"], top["y"])
             is_selected = (self.app.selected_toponym_idx == idx)
             dot_col = "#f1c40f" if is_selected else "#00cec9"
-            text_col = "#f1c40f" if is_selected else "#ffffff"
+            text_col = "#d35400" if is_selected else "#0984e3"
 
             self.create_oval(cx - 4, cy - 4, cx + 4, cy + 4, fill=dot_col, outline="#ffffff", width=1)
             self.create_text(cx + 8, cy, text=f"🏷️ {top['text']}", fill=text_col, font=("Segoe UI", 11, "bold"), anchor="w")
@@ -397,7 +420,7 @@ class ToponymDialog(ctk.CTkToplevel):
             disp_h = min(110, max(40, disp_h))
             crop_resized = crop_img.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
             self.tk_crop = ImageTk.PhotoImage(crop_resized)
-            lbl_crop = tk.Label(self, image=self.tk_crop, bg="#121317")
+            lbl_crop = tk.Label(self, image=self.tk_crop)
             lbl_crop.pack(padx=20, pady=4)
 
         ctk.CTkLabel(self, text="Textinhalt / Name:", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", padx=25, pady=(6, 2))
@@ -414,7 +437,7 @@ class ToponymDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(self, text="Vorschläge für diese Geo-Position (GeoNames / OSM):", font=ctk.CTkFont(size=11), text_color="#00cec9").pack(anchor="w", padx=25, pady=(8, 2))
         
-        self.sugg_scroll = ctk.CTkScrollableFrame(self, height=55, fg_color="#181a20", orientation="horizontal")
+        self.sugg_scroll = ctk.CTkScrollableFrame(self, height=55, orientation="horizontal")
         self.sugg_scroll.pack(fill="x", padx=25, pady=2)
 
         suggs_to_show = suggestions or [
@@ -431,7 +454,7 @@ class ToponymDialog(ctk.CTkToplevel):
             s_cat = s.get("category", "settlement")
             btn_s = ctk.CTkButton(
                 self.sugg_scroll, text=s_name, height=28,
-                fg_color="#2c3e50", hover_color="#34495e", font=ctk.CTkFont(size=11),
+                font=ctk.CTkFont(size=11),
                 command=lambda n=s_name, c=s_cat: self._select_suggestion(n, c)
             )
             btn_s.pack(side="left", padx=3)
@@ -450,7 +473,7 @@ class ToponymDialog(ctk.CTkToplevel):
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=25, pady=(15, 10))
 
-        btn_cancel = ctk.CTkButton(btn_frame, text="Abbrechen", command=self._on_cancel, fg_color="#444", hover_color="#666", width=140)
+        btn_cancel = ctk.CTkButton(btn_frame, text="Abbrechen", command=self._on_cancel, width=140)
         btn_cancel.pack(side="left")
 
         btn_save = ctk.CTkButton(btn_frame, text="💾 Speichern (Enter)", command=self._on_save, fg_color="#27ae60", hover_color="#2ecc71", width=200, font=ctk.CTkFont(weight="bold"))
@@ -497,12 +520,12 @@ class ToponymDialog(ctk.CTkToplevel):
 class TranchotDesktopApp(ctk.CTk):
     """
     Desktop GIS application with Left Sidebar (Tools & Automation), Right Sidebar (Pipette & De-Yellowing),
-    and high-performance MapCanvas.
+    and high-performance MapCanvas. Adaptive Light/Dark appearance mode.
     """
     def __init__(self):
         super().__init__()
 
-        self.title("🏛️ Tranchot Extractor — Interaktive Weißabgleich-Restaurierung & GIS Extraktion (BCDH)")
+        self.title("🏛️ Tranchot Extractor — Historische Kartenanalyse & GIS Extraktion (BCDH)")
         self.geometry("1620x960")
         self.minsize(1180, 740)
 
@@ -553,156 +576,181 @@ class TranchotDesktopApp(ctk.CTk):
         # =========================================================================
         # 1. Left Sidebar: Map, Auto-Extractors, Tools, Layers, Export
         # =========================================================================
-        self.left_sidebar = ctk.CTkScrollableFrame(self, width=320, corner_radius=0, fg_color="#181a20")
+        self.left_sidebar = ctk.CTkScrollableFrame(self, width=320, corner_radius=0, fg_color=THEME_SIDEBAR_FG)
         self.left_sidebar.grid(row=0, column=0, sticky="nsew")
 
         # Title
-        lbl_title = ctk.CTkLabel(self.left_sidebar, text="🏛️ Tranchot Extractor", font=ctk.CTkFont(size=19, weight="bold"))
+        lbl_title = ctk.CTkLabel(self.left_sidebar, text="🏛️ Tranchot Extractor", font=ctk.CTkFont(size=19, weight="bold"), text_color=THEME_TEXT_MAIN)
         lbl_title.pack(anchor="w", padx=15, pady=(12, 2))
-        lbl_sub = ctk.CTkLabel(self.left_sidebar, text="Kartenaufnahme der Rheinlande 1803–1828\nBCDH Universität Bonn", font=ctk.CTkFont(size=11), text_color="gray70", justify="left")
+        lbl_sub = ctk.CTkLabel(self.left_sidebar, text="Kartenaufnahme der Rheinlande 1803–1828\nBCDH Universität Bonn", font=ctk.CTkFont(size=11), text_color=THEME_TEXT_MUTED, justify="left")
         lbl_sub.pack(anchor="w", padx=15, pady=(0, 12))
 
-        # Section: Map Loading
-        self._create_section_label(self.left_sidebar, "📂 1. Karte laden")
-        btn_open = ctk.CTkButton(self.left_sidebar, text="📁 Eigene Karte / GeoTIFF laden...", command=self._open_file_dialog, height=34, font=ctk.CTkFont(weight="bold"))
-        btn_open.pack(fill="x", padx=15, pady=3)
+        # Section: Map Loading Card
+        card_load = ctk.CTkFrame(self.left_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
+        card_load.pack(fill="x", padx=10, pady=4)
+
+        self._create_section_label(card_load, "📂 1. Karte laden")
+        btn_open = ctk.CTkButton(card_load, text="📁 Eigene Karte laden...", command=self._open_file_dialog, height=34, font=ctk.CTkFont(weight="bold"))
+        btn_open.pack(fill="x", padx=12, pady=3)
 
         self.sample_dropdown = ctk.CTkOptionMenu(
-            self.left_sidebar,
+            card_load,
             values=["Beispiel: Nickenich (GeoTIFF)", "Beispiel: Rommerskirchen", "Beispiel: Kruft"],
             command=self._on_sample_selected,
             height=30
         )
-        self.sample_dropdown.pack(fill="x", padx=15, pady=3)
+        self.sample_dropdown.pack(fill="x", padx=12, pady=(3, 10))
 
-        # Section: Automatic Extraction
-        self._create_section_label(self.left_sidebar, "⚡ 2. Automatische Extraktion")
+        # Section: Automatic Extraction Card
+        card_auto = ctk.CTkFrame(self.left_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
+        card_auto.pack(fill="x", padx=10, pady=4)
+
+        self._create_section_label(card_auto, "⚡ 2. Automatische Extraktion")
         
         btn_auto_landuse = ctk.CTkButton(
-            self.left_sidebar,
+            card_auto,
             text="🌲 Gesamte Landnutzung extrahieren",
             command=self._run_auto_landuse,
             fg_color="#27ae60", hover_color="#2ecc71",
-            height=36, font=ctk.CTkFont(size=12, weight="bold")
-        )
-        btn_auto_landuse.pack(fill="x", padx=15, pady=3)
-
-        btn_auto_roads = ctk.CTkButton(
-            self.left_sidebar,
-            text="🛣️ Alle Hauptachsen (≥1 km) extrahieren",
-            command=self._run_auto_roads,
-            fg_color="#d35400", hover_color="#e67e22",
             height=34, font=ctk.CTkFont(size=12, weight="bold")
         )
-        btn_auto_roads.pack(fill="x", padx=15, pady=3)
+        btn_auto_landuse.pack(fill="x", padx=12, pady=3)
+
+        btn_auto_roads = ctk.CTkButton(
+            card_auto,
+            text="🛣️ Hauptachsen (≥1 km) extrahieren",
+            command=self._run_auto_roads,
+            fg_color="#d35400", hover_color="#e67e22",
+            height=32, font=ctk.CTkFont(size=12, weight="bold")
+        )
+        btn_auto_roads.pack(fill="x", padx=12, pady=3)
 
         btn_auto_all_sampled = ctk.CTkButton(
-            self.left_sidebar,
+            card_auto,
             text="🟠 Alle gesampelten Klassen extrahieren",
             command=self._run_extract_all_sampled_classes,
             fg_color="#8e44ad", hover_color="#9b59b6",
-            height=34, font=ctk.CTkFont(size=12, weight="bold")
+            height=32, font=ctk.CTkFont(size=12, weight="bold")
         )
-        btn_auto_all_sampled.pack(fill="x", padx=15, pady=3)
+        btn_auto_all_sampled.pack(fill="x", padx=12, pady=(3, 10))
 
-        # Section: Tools
-        self._create_section_label(self.left_sidebar, "🛠️ 3. Werkzeuge")
+        # Section: Tools Card
+        card_tools = ctk.CTkFrame(self.left_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
+        card_tools.pack(fill="x", padx=10, pady=4)
+
+        self._create_section_label(card_tools, "🛠️ 3. Werkzeuge")
         self.tool_var = ctk.StringVar(value="pipette")
 
-        r_pipette = ctk.CTkRadioButton(self.left_sidebar, text="🎨 Farb-Pipette (Klick zum Samplen)", variable=self.tool_var, value="pipette", command=self._on_tool_change)
-        r_pipette.pack(anchor="w", padx=15, pady=3)
+        r_pipette = ctk.CTkRadioButton(card_tools, text="🎨 Farb-Pipette (Klick zum Samplen)", variable=self.tool_var, value="pipette", command=self._on_tool_change)
+        r_pipette.pack(anchor="w", padx=12, pady=2)
 
-        r_road_snap = ctk.CTkRadioButton(self.left_sidebar, text="🛣️ Straße nachverfolgen (Klick A ➔ B)", variable=self.tool_var, value="road_snap", command=self._on_tool_change)
-        r_road_snap.pack(anchor="w", padx=15, pady=3)
+        r_road_snap = ctk.CTkRadioButton(card_tools, text="🛣️ Straße nachverfolgen (A ➔ B)", variable=self.tool_var, value="road_snap", command=self._on_tool_change)
+        r_road_snap.pack(anchor="w", padx=12, pady=2)
 
-        r_toponym = ctk.CTkRadioButton(self.left_sidebar, text="🏷️ Beschriftung aufziehen (Rechteck)", variable=self.tool_var, value="toponym", command=self._on_tool_change)
-        r_toponym.pack(anchor="w", padx=15, pady=3)
+        r_toponym = ctk.CTkRadioButton(card_tools, text="🏷️ Beschriftung aufziehen (Box)", variable=self.tool_var, value="toponym", command=self._on_tool_change)
+        r_toponym.pack(anchor="w", padx=12, pady=2)
 
-        r_select = ctk.CTkRadioButton(self.left_sidebar, text="👆 Objekt auswählen & löschen", variable=self.tool_var, value="select", command=self._on_tool_change)
-        r_select.pack(anchor="w", padx=15, pady=3)
+        r_select = ctk.CTkRadioButton(card_tools, text="👆 Objekt auswählen & löschen", variable=self.tool_var, value="select", command=self._on_tool_change)
+        r_select.pack(anchor="w", padx=12, pady=2)
 
-        r_pan = ctk.CTkRadioButton(self.left_sidebar, text="✋ Karte verschieben (Pan)", variable=self.tool_var, value="pan", command=self._on_tool_change)
-        r_pan.pack(anchor="w", padx=15, pady=3)
+        r_pan = ctk.CTkRadioButton(card_tools, text="✋ Karte verschieben (Pan)", variable=self.tool_var, value="pan", command=self._on_tool_change)
+        r_pan.pack(anchor="w", padx=12, pady=2)
 
-        btn_delete_sel = ctk.CTkButton(self.left_sidebar, text="🗑️ Ausgewähltes Element löschen", command=self._delete_selected, fg_color="#333", hover_color="#555", height=30)
-        btn_delete_sel.pack(fill="x", padx=15, pady=5)
+        btn_delete_sel = ctk.CTkButton(card_tools, text="🗑️ Ausgewähltes Element löschen", command=self._delete_selected, fg_color="#c0392b", hover_color="#e74c3c", height=28)
+        btn_delete_sel.pack(fill="x", padx=12, pady=(6, 3))
 
-        btn_clear = ctk.CTkButton(self.left_sidebar, text="🧹 Alle Layer leeren", command=self._clear_all_features, fg_color="#444", hover_color="#666", height=30)
-        btn_clear.pack(fill="x", padx=15, pady=3)
+        btn_clear = ctk.CTkButton(card_tools, text="🧹 Alle Layer leeren", command=self._clear_all_features, fg_color="#7f8c8d", hover_color="#95a5a6", height=28)
+        btn_clear.pack(fill="x", padx=12, pady=(2, 10))
 
-        # Section: Layer Visibility
-        self._create_section_label(self.left_sidebar, "👁️ 4. Ebenen anzeigen")
+        # Section: Layer Visibility Card
+        card_layers = ctk.CTkFrame(self.left_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
+        card_layers.pack(fill="x", padx=10, pady=4)
+
+        self._create_section_label(card_layers, "👁️ 4. Ebenen anzeigen")
         self.show_bldgs_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.left_sidebar, text="🏛️ Gebäude / Hofanlagen", variable=self.show_bldgs_var, command=self._on_layer_toggle).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkCheckBox(card_layers, text="🏛️ Gebäude / Hofanlagen", variable=self.show_bldgs_var, command=self._on_layer_toggle).pack(anchor="w", padx=12, pady=2)
 
         self.show_roads_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.left_sidebar, text="🛣️ Straßen-Mittellinien", variable=self.show_roads_var, command=self._on_layer_toggle).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkCheckBox(card_layers, text="🛣️ Straßen-Mittellinien", variable=self.show_roads_var, command=self._on_layer_toggle).pack(anchor="w", padx=12, pady=2)
 
         self.show_toponyms_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.left_sidebar, text="🏷️ Beschriftungen / Namen", variable=self.show_toponyms_var, command=self._on_layer_toggle).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkCheckBox(card_layers, text="🏷️ Beschriftungen / Namen", variable=self.show_toponyms_var, command=self._on_layer_toggle).pack(anchor="w", padx=12, pady=2)
 
         self.show_forests_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.left_sidebar, text="🌲 Waldflächen", variable=self.show_forests_var, command=self._on_layer_toggle).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkCheckBox(card_layers, text="🌲 Waldflächen", variable=self.show_forests_var, command=self._on_layer_toggle).pack(anchor="w", padx=12, pady=2)
 
         self.show_meadows_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.left_sidebar, text="🌿 Wiesen / Feuchtgrünland", variable=self.show_meadows_var, command=self._on_layer_toggle).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkCheckBox(card_layers, text="🌿 Wiesen / Feuchtgrünland", variable=self.show_meadows_var, command=self._on_layer_toggle).pack(anchor="w", padx=12, pady=2)
 
         self.show_water_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.left_sidebar, text="💧 Gewässer / Seen", variable=self.show_water_var, command=self._on_layer_toggle).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkCheckBox(card_layers, text="💧 Gewässer / Seen", variable=self.show_water_var, command=self._on_layer_toggle).pack(anchor="w", padx=12, pady=2)
 
         self.show_gravel_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.left_sidebar, text="🟠 Kies- & Schotterbänke", variable=self.show_gravel_var, command=self._on_layer_toggle).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkCheckBox(card_layers, text="🟠 Kies- & Schotterbänke", variable=self.show_gravel_var, command=self._on_layer_toggle).pack(anchor="w", padx=12, pady=2)
 
         self.show_vineyard_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.left_sidebar, text="🍇 Weinberge (Rebhänge)", variable=self.show_vineyard_var, command=self._on_layer_toggle).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkCheckBox(card_layers, text="🍇 Weinberge (Rebhänge)", variable=self.show_vineyard_var, command=self._on_layer_toggle).pack(anchor="w", padx=12, pady=2)
 
         self.show_garden_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.left_sidebar, text="🟨 Gärten / Nutzkulturen", variable=self.show_garden_var, command=self._on_layer_toggle).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkCheckBox(card_layers, text="🟨 Gärten / Nutzkulturen", variable=self.show_garden_var, command=self._on_layer_toggle).pack(anchor="w", padx=12, pady=(2, 10))
 
-        # Section: Export & Target EPSG
-        self._create_section_label(self.left_sidebar, "💾 5. GIS Export & KBS")
+        # Section: Export & Target EPSG Card
+        card_export = ctk.CTkFrame(self.left_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
+        card_export.pack(fill="x", padx=10, pady=4)
 
-        ctk.CTkLabel(self.left_sidebar, text="Ausgabe-KBS (EPSG):", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=15, pady=(2, 0))
-        self.entry_epsg = ctk.CTkEntry(self.left_sidebar, height=30, font=ctk.CTkFont(size=12, weight="bold"))
+        self._create_section_label(card_export, "💾 5. GIS Export & KBS")
+
+        ctk.CTkLabel(card_export, text="Ausgabe-KBS (EPSG):", font=ctk.CTkFont(size=11), text_color=THEME_TEXT_MUTED).pack(anchor="w", padx=12, pady=(2, 0))
+        self.entry_epsg = ctk.CTkEntry(card_export, height=30, font=ctk.CTkFont(size=12, weight="bold"))
         self.entry_epsg.insert(0, "EPSG:25832")
-        self.entry_epsg.pack(fill="x", padx=15, pady=(0, 6))
+        self.entry_epsg.pack(fill="x", padx=12, pady=(0, 6))
 
-        btn_exp_gpkg = ctk.CTkButton(self.left_sidebar, text="💾 GeoPackage (.gpkg) [Farbstile inkl.]", command=lambda: self._export_gis("gpkg"), fg_color="#27ae60", hover_color="#2ecc71", height=34, font=ctk.CTkFont(weight="bold"))
-        btn_exp_gpkg.pack(fill="x", padx=15, pady=3)
+        btn_exp_gpkg = ctk.CTkButton(card_export, text="💾 GeoPackage (.gpkg) [Farbstile]", command=lambda: self._export_gis("gpkg"), fg_color="#27ae60", hover_color="#2ecc71", height=34, font=ctk.CTkFont(weight="bold"))
+        btn_exp_gpkg.pack(fill="x", padx=12, pady=3)
 
-        btn_exp_shp = ctk.CTkButton(self.left_sidebar, text="💾 ESRI Shapefile (.shp)", command=lambda: self._export_gis("shp"), fg_color="#2980b9", hover_color="#3498db", height=32)
-        btn_exp_shp.pack(fill="x", padx=15, pady=3)
+        btn_exp_shp = ctk.CTkButton(card_export, text="💾 ESRI Shapefile (.shp)", command=lambda: self._export_gis("shp"), fg_color="#2980b9", hover_color="#3498db", height=30)
+        btn_exp_shp.pack(fill="x", padx=12, pady=3)
 
-        btn_exp_geojson = ctk.CTkButton(self.left_sidebar, text="💾 GeoJSON (.geojson)", command=lambda: self._export_gis("geojson"), fg_color="#8e44ad", hover_color="#9b59b6", height=32)
-        btn_exp_geojson.pack(fill="x", padx=15, pady=3)
+        btn_exp_geojson = ctk.CTkButton(card_export, text="💾 GeoJSON (.geojson)", command=lambda: self._export_gis("geojson"), fg_color="#8e44ad", hover_color="#9b59b6", height=30)
+        btn_exp_geojson.pack(fill="x", padx=12, pady=(3, 10))
 
         # =========================================================================
         # 2. Main Canvas Area (Center)
         # =========================================================================
-        self.main_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="#121317")
+        self.main_frame = ctk.CTkFrame(self, corner_radius=0, fg_color=THEME_MAIN_FG)
         self.main_frame.grid(row=0, column=1, sticky="nsew")
         self.main_frame.grid_rowconfigure(1, weight=1)
         self.main_frame.grid_columnconfigure(0, weight=1)
 
         # Top Bar on Canvas
-        self.topbar = ctk.CTkFrame(self.main_frame, height=42, corner_radius=0, fg_color="#1a1c23")
+        self.topbar = ctk.CTkFrame(self.main_frame, height=44, corner_radius=0, fg_color=THEME_TOPBAR_FG)
         self.topbar.grid(row=0, column=0, sticky="ew")
 
-        self.lbl_count = ctk.CTkLabel(self.topbar, text="🏛️ 0 | 🛣️ 0 | 🏷️ 0 | 🌲 0 | 🌿 0 | 💧 0 | 🟠 0 | 🍇 0", font=ctk.CTkFont(size=12, weight="bold"))
+        self.lbl_count = ctk.CTkLabel(self.topbar, text="🏛️ 0 | 🛣️ 0 | 🏷️ 0 | 🌲 0 | 🌿 0 | 💧 0 | 🟠 0 | 🍇 0", font=ctk.CTkFont(size=12, weight="bold"), text_color=THEME_TEXT_MAIN)
         self.lbl_count.pack(side="left", padx=15, pady=8)
+
+        # Appearance Mode Selector (Light/Dark Switcher)
+        self.opt_theme = ctk.CTkOptionMenu(
+            self.topbar,
+            values=["☀️ Hell (Standard)", "🌙 Dunkel", "💻 System"],
+            command=self._on_theme_changed,
+            width=150, height=28,
+            font=ctk.CTkFont(size=11, weight="bold")
+        )
+        self.opt_theme.pack(side="right", padx=(6, 15), pady=6)
 
         # Toggle Button: Raw vs Restored View
         self.btn_toggle_view = ctk.CTkButton(
             self.topbar,
-            text="✨ Restaurierte Ansicht (Aktiv)",
-            width=190,
+            text="✨ Restauriert (Aktiv)",
+            width=160,
             command=self._toggle_enhanced_view,
             fg_color="#27ae60", hover_color="#2ecc71",
             height=28, font=ctk.CTkFont(size=11, weight="bold")
         )
-        self.btn_toggle_view.pack(side="right", padx=(6, 15), pady=6)
+        self.btn_toggle_view.pack(side="right", padx=6, pady=6)
 
-        btn_reset_view = ctk.CTkButton(self.topbar, text="🔍 Ansicht einpassen", width=130, command=lambda: self.canvas.reset_view(), height=28)
+        btn_reset_view = ctk.CTkButton(self.topbar, text="🔍 Einpassen", width=110, command=lambda: self.canvas.reset_view(), height=28)
         btn_reset_view.pack(side="right", padx=6, pady=6)
 
         # Canvas
@@ -710,65 +758,68 @@ class TranchotDesktopApp(ctk.CTk):
         self.canvas.grid(row=1, column=0, sticky="nsew")
 
         # Status Bar
-        self.status_bar = ctk.CTkFrame(self.main_frame, height=28, corner_radius=0, fg_color="#14161b")
+        self.status_bar = ctk.CTkFrame(self.main_frame, height=30, corner_radius=0, fg_color=THEME_STATUSBAR_FG)
         self.status_bar.grid(row=2, column=0, sticky="ew")
 
-        self.lbl_status = ctk.CTkLabel(self.status_bar, text="Bereit.", font=ctk.CTkFont(size=11))
+        self.lbl_status = ctk.CTkLabel(self.status_bar, text="Bereit.", font=ctk.CTkFont(size=11), text_color=THEME_TEXT_MAIN)
         self.lbl_status.pack(side="left", padx=15, pady=4)
 
-        self.lbl_coords = ctk.CTkLabel(self.status_bar, text="X: 0 | Y: 0 | Zoom: 100%", font=ctk.CTkFont(size=11), text_color="gray60")
+        self.lbl_coords = ctk.CTkLabel(self.status_bar, text="X: 0 | Y: 0 | Zoom: 100%", font=ctk.CTkFont(size=11), text_color=THEME_TEXT_MUTED)
         self.lbl_coords.pack(side="right", padx=15, pady=4)
 
         # =========================================================================
         # 3. Right Sidebar: Dedicated Pipette & Color Calibration Panel
         # =========================================================================
-        self.right_sidebar = ctk.CTkScrollableFrame(self, width=350, corner_radius=0, fg_color="#181a20")
+        self.right_sidebar = ctk.CTkScrollableFrame(self, width=350, corner_radius=0, fg_color=THEME_SIDEBAR_FG)
         self.right_sidebar.grid(row=0, column=2, sticky="nsew")
 
-        # Section 0: White-Balance & De-Yellowing
-        lbl_enhance_title = ctk.CTkLabel(self.right_sidebar, text="✨ 0. Weißabgleich & Entgilbung", font=ctk.CTkFont(size=15, weight="bold"), text_color="#2ecc71")
-        lbl_enhance_title.pack(anchor="w", padx=15, pady=(12, 2))
+        # Section 0 Card: White-Balance & De-Yellowing
+        card_enhance = ctk.CTkFrame(self.right_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
+        card_enhance.pack(fill="x", padx=10, pady=4)
+
+        lbl_enhance_title = ctk.CTkLabel(card_enhance, text="✨ 0. Weißabgleich & Entgilbung", font=ctk.CTkFont(size=14, weight="bold"), text_color="#27ae60")
+        lbl_enhance_title.pack(anchor="w", padx=12, pady=(10, 2))
 
         self.enhance_active_var = ctk.BooleanVar(value=True)
         cb_enhance = ctk.CTkCheckBox(
-            self.right_sidebar,
+            card_enhance,
             text="✨ Entgilbung & Farbverstärkung aktiv",
             variable=self.enhance_active_var,
             command=self._apply_enhancement_settings,
             font=ctk.CTkFont(size=11, weight="bold")
         )
-        cb_enhance.pack(anchor="w", padx=15, pady=(2, 6))
+        cb_enhance.pack(anchor="w", padx=12, pady=(2, 6))
 
-        # De-yellowing slider
-        self.lbl_deyellow_header = ctk.CTkLabel(self.right_sidebar, text="Entgilbung / Weißabgleich (85%):", font=ctk.CTkFont(size=11))
-        self.lbl_deyellow_header.pack(anchor="w", padx=15, pady=(2, 0))
+        self.lbl_deyellow_header = ctk.CTkLabel(card_enhance, text="Entgilbung / Weißabgleich (85%):", font=ctk.CTkFont(size=11))
+        self.lbl_deyellow_header.pack(anchor="w", padx=12, pady=(2, 0))
 
-        self.slider_deyellow = ctk.CTkSlider(self.right_sidebar, from_=0.0, to=1.0, number_of_steps=20, command=self._on_deyellow_slider_moved)
+        self.slider_deyellow = ctk.CTkSlider(card_enhance, from_=0.0, to=1.0, number_of_steps=20, command=self._on_deyellow_slider_moved)
         self.slider_deyellow.set(0.85)
-        self.slider_deyellow.pack(fill="x", padx=15, pady=2)
+        self.slider_deyellow.pack(fill="x", padx=12, pady=2)
 
-        # Vibrancy slider
-        self.lbl_vibrance_header = ctk.CTkLabel(self.right_sidebar, text="Farb-Leuchtkraft (1.85×):", font=ctk.CTkFont(size=11))
-        self.lbl_vibrance_header.pack(anchor="w", padx=15, pady=(4, 0))
+        self.lbl_vibrance_header = ctk.CTkLabel(card_enhance, text="Farb-Leuchtkraft (1.85×):", font=ctk.CTkFont(size=11))
+        self.lbl_vibrance_header.pack(anchor="w", padx=12, pady=(4, 0))
 
-        self.slider_vibrance = ctk.CTkSlider(self.right_sidebar, from_=1.0, to=3.0, number_of_steps=20, command=self._on_vibrance_slider_moved)
+        self.slider_vibrance = ctk.CTkSlider(card_enhance, from_=1.0, to=3.0, number_of_steps=20, command=self._on_vibrance_slider_moved)
         self.slider_vibrance.set(1.85)
-        self.slider_vibrance.pack(fill="x", padx=15, pady=2)
+        self.slider_vibrance.pack(fill="x", padx=12, pady=(2, 10))
 
-        # Section 1: Pipette Calibration
-        lbl_right_title = ctk.CTkLabel(self.right_sidebar, text="🎨 1. Blatt-Kalibrierung & Pipetten", font=ctk.CTkFont(size=15, weight="bold"), text_color="#00cec9")
-        lbl_right_title.pack(anchor="w", padx=15, pady=(16, 2))
+        # Section 1 Card: Pipette Calibration
+        card_pipette = ctk.CTkFrame(self.right_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
+        card_pipette.pack(fill="x", padx=10, pady=4)
+
+        lbl_right_title = ctk.CTkLabel(card_pipette, text="🎨 1. Blatt-Kalibrierung & Pipetten", font=ctk.CTkFont(size=14, weight="bold"), text_color="#0984e3")
+        lbl_right_title.pack(anchor="w", padx=12, pady=(10, 2))
         
         lbl_right_desc = ctk.CTkLabel(
-            self.right_sidebar,
+            card_pipette,
             text="Wähle eine Pipette und klicke auf die Karte, um den Farbton für dieses Blatt zu lernen.",
-            font=ctk.CTkFont(size=10), text_color="gray70", justify="left", wraplength=310
+            font=ctk.CTkFont(size=10), text_color=THEME_TEXT_MUTED, justify="left", wraplength=310
         )
-        lbl_right_desc.pack(anchor="w", padx=15, pady=(0, 10))
+        lbl_right_desc.pack(anchor="w", padx=12, pady=(0, 6))
 
-        # Active Pipette Dropdown
         self.pipette_dropdown = ctk.CTkOptionMenu(
-            self.right_sidebar,
+            card_pipette,
             values=[
                 "🌲 Wald (Laub/Nadel)",
                 "🌿 Wiese / Aue / Grünland",
@@ -783,147 +834,158 @@ class TranchotDesktopApp(ctk.CTk):
             height=34,
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.pipette_dropdown.pack(fill="x", padx=15, pady=4)
+        self.pipette_dropdown.pack(fill="x", padx=12, pady=4)
 
-        # Active Swatch & Live Indicator
-        self.swatch_frame = ctk.CTkFrame(self.right_sidebar, fg_color="#22252e", height=46)
-        self.swatch_frame.pack(fill="x", padx=15, pady=6)
+        self.swatch_frame = ctk.CTkFrame(card_pipette, fg_color=THEME_SWATCH_FRAME, height=46)
+        self.swatch_frame.pack(fill="x", padx=12, pady=4)
 
         self.swatch_box = tk.Label(self.swatch_frame, text="", bg="#27ae60", width=4, height=1)
-        self.swatch_box.pack(side="left", padx=10, pady=8)
+        self.swatch_box.pack(side="left", padx=8, pady=6)
 
         self.lbl_swatch_info = ctk.CTkLabel(self.swatch_frame, text="Farbe: Standard-Vorlage\nKlicke Karte zum Samplen", font=ctk.CTkFont(size=11), justify="left")
         self.lbl_swatch_info.pack(side="left", padx=4, pady=4)
 
-        # Fine-tuned Tolerance slider (Range 2..25, Default 8)
-        self.lbl_tol_header = ctk.CTkLabel(self.right_sidebar, text="Toleranz / Farbabstand (ΔE = 8):", font=ctk.CTkFont(size=11, weight="bold"))
-        self.lbl_tol_header.pack(anchor="w", padx=15, pady=(8, 0))
+        self.lbl_tol_header = ctk.CTkLabel(card_pipette, text="Toleranz / Farbabstand (ΔE = 8):", font=ctk.CTkFont(size=11, weight="bold"))
+        self.lbl_tol_header.pack(anchor="w", padx=12, pady=(6, 0))
 
-        self.slider_tol = ctk.CTkSlider(self.right_sidebar, from_=2, to=25, number_of_steps=23, command=self._on_tolerance_changed)
+        self.slider_tol = ctk.CTkSlider(card_pipette, from_=2, to=25, number_of_steps=23, command=self._on_tolerance_changed)
         self.slider_tol.set(8)
-        self.slider_tol.pack(fill="x", padx=15, pady=2)
+        self.slider_tol.pack(fill="x", padx=12, pady=2)
 
-        # Action: Extract current sampled class or all competitive
         btn_landuse_box = ctk.CTkButton(
-            self.right_sidebar,
+            card_pipette,
             text="📐 Flächen ROI-Box aufziehen (Testen)",
             command=lambda: self._set_active_tool("landuse_box"),
             fg_color="#27ae60", hover_color="#2ecc71",
             height=34, font=ctk.CTkFont(size=12, weight="bold")
         )
-        btn_landuse_box.pack(fill="x", padx=15, pady=(6, 3))
+        btn_landuse_box.pack(fill="x", padx=12, pady=(6, 3))
 
         btn_extract_competitive = ctk.CTkButton(
-            self.right_sidebar,
+            card_pipette,
             text="⚡ Alle Flächen kompetitiv extrahieren (Wettbewerb)",
             command=self._run_extract_all_sampled_classes,
             fg_color="#16a085", hover_color="#1abc9c",
             height=34, font=ctk.CTkFont(size=12, weight="bold")
         )
-        btn_extract_competitive.pack(fill="x", padx=15, pady=3)
+        btn_extract_competitive.pack(fill="x", padx=12, pady=3)
 
         btn_extract_active = ctk.CTkButton(
-            self.right_sidebar,
+            card_pipette,
             text="🎯 Nur aktive Pipetten-Klasse extrahieren",
             command=self._run_extract_active_sample,
             fg_color="#2980b9", hover_color="#3498db",
             height=30, font=ctk.CTkFont(size=11)
         )
-        btn_extract_active.pack(fill="x", padx=15, pady=(3, 8))
+        btn_extract_active.pack(fill="x", padx=12, pady=(3, 8))
 
-        # Separator & Quick Palette Class List
-        self._create_section_label(self.right_sidebar, "📋 Farbfelder aller Klassen")
-        self._build_palette_class_list()
+        # Palette list card
+        card_swatches = ctk.CTkFrame(self.right_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
+        card_swatches.pack(fill="x", padx=10, pady=4)
 
-        # Profile Save/Load
-        self._create_section_label(self.right_sidebar, "💾 Blatt-Profil (.palette.json)")
-        btn_prof_frame = ctk.CTkFrame(self.right_sidebar, fg_color="transparent")
-        btn_prof_frame.pack(fill="x", padx=15, pady=4)
+        self._create_section_label(card_swatches, "📋 Farbfelder aller Klassen")
+        self._build_palette_class_list_inside(card_swatches)
 
-        btn_save_prof = ctk.CTkButton(btn_prof_frame, text="💾 Profil speichern", command=self._save_palette_profile, fg_color="#34495e", hover_color="#2c3e50", height=30, width=150)
+        # Profile Save/Load Card
+        card_prof = ctk.CTkFrame(self.right_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
+        card_prof.pack(fill="x", padx=10, pady=4)
+
+        self._create_section_label(card_prof, "💾 Blatt-Profil (.palette.json)")
+        btn_prof_frame = ctk.CTkFrame(card_prof, fg_color="transparent")
+        btn_prof_frame.pack(fill="x", padx=12, pady=(2, 10))
+
+        btn_save_prof = ctk.CTkButton(btn_prof_frame, text="💾 Speichern", command=self._save_palette_profile, height=30, width=140)
         btn_save_prof.pack(side="left")
 
-        btn_load_prof = ctk.CTkButton(btn_prof_frame, text="📂 Profil laden", command=self._load_palette_profile, fg_color="#34495e", hover_color="#2c3e50", height=30, width=150)
+        btn_load_prof = ctk.CTkButton(btn_prof_frame, text="📂 Laden", command=self._load_palette_profile, height=30, width=140)
         btn_load_prof.pack(side="right")
 
-        # Section 2: Building Footprint & Courtyard Extraction Panel
-        lbl_bldg_title = ctk.CTkLabel(self.right_sidebar, text="🏛️ 2. Gebäude & Hofanlagen", font=ctk.CTkFont(size=15, weight="bold"), text_color="#e74c3c")
-        lbl_bldg_title.pack(anchor="w", padx=15, pady=(18, 2))
+        # Section 2 Card: Building Footprint & Courtyard Extraction Panel
+        card_bldg = ctk.CTkFrame(self.right_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
+        card_bldg.pack(fill="x", padx=10, pady=4)
+
+        lbl_bldg_title = ctk.CTkLabel(card_bldg, text="🏛️ 2. Gebäude & Hofanlagen", font=ctk.CTkFont(size=14, weight="bold"), text_color="#c0392b")
+        lbl_bldg_title.pack(anchor="w", padx=12, pady=(10, 2))
 
         lbl_bldg_desc = ctk.CTkLabel(
-            self.right_sidebar,
+            card_bldg,
             text="Ziehe eine ROI-Box auf der Karte auf, um Gebäude in einem Ausschnitt zu testen und zu extrahieren.",
-            font=ctk.CTkFont(size=10), text_color="gray70", justify="left", wraplength=310
+            font=ctk.CTkFont(size=10), text_color=THEME_TEXT_MUTED, justify="left", wraplength=310
         )
-        lbl_bldg_desc.pack(anchor="w", padx=15, pady=(0, 6))
+        lbl_bldg_desc.pack(anchor="w", padx=12, pady=(0, 6))
 
-        # Mode Buttons
         btn_bldg_box = ctk.CTkButton(
-            self.right_sidebar,
+            card_bldg,
             text="📐 Gebäude ROI-Box aufziehen (Testen)",
             command=lambda: self._set_active_tool("bldg_box"),
             fg_color="#c0392b", hover_color="#e74c3c",
             height=36, font=ctk.CTkFont(size=12, weight="bold")
         )
-        btn_bldg_box.pack(fill="x", padx=15, pady=3)
+        btn_bldg_box.pack(fill="x", padx=12, pady=3)
 
         btn_bldg_click = ctk.CTkButton(
-            self.right_sidebar,
+            card_bldg,
             text="🏛️ Einzelnes Gebäude anklicken",
             command=lambda: self._set_active_tool("extract"),
             fg_color="#34495e", hover_color="#2c3e50",
             height=30, font=ctk.CTkFont(size=11)
         )
-        btn_bldg_click.pack(fill="x", padx=15, pady=3)
+        btn_bldg_click.pack(fill="x", padx=12, pady=3)
 
-        # Red differential sensitivity slider (10..45)
-        self.lbl_bldg_diff_header = ctk.CTkLabel(self.right_sidebar, text="Rot-Empfindlichkeit (RGB-Diff = 18):", font=ctk.CTkFont(size=11, weight="bold"))
-        self.lbl_bldg_diff_header.pack(anchor="w", padx=15, pady=(8, 0))
+        self.lbl_bldg_diff_header = ctk.CTkLabel(card_bldg, text="Rot-Empfindlichkeit (RGB-Diff = 18):", font=ctk.CTkFont(size=11, weight="bold"))
+        self.lbl_bldg_diff_header.pack(anchor="w", padx=12, pady=(6, 0))
 
-        self.slider_bldg_diff = ctk.CTkSlider(self.right_sidebar, from_=10, to=45, number_of_steps=35, command=self._on_bldg_diff_changed)
+        self.slider_bldg_diff = ctk.CTkSlider(card_bldg, from_=10, to=45, number_of_steps=35, command=self._on_bldg_diff_changed)
         self.slider_bldg_diff.set(18)
-        self.slider_bldg_diff.pack(fill="x", padx=15, pady=2)
+        self.slider_bldg_diff.pack(fill="x", padx=12, pady=2)
 
-        # Minimum building area slider (4..40 px)
-        self.lbl_bldg_min_area = ctk.CTkLabel(self.right_sidebar, text="Mindestfläche (6 px²):", font=ctk.CTkFont(size=11))
-        self.lbl_bldg_min_area.pack(anchor="w", padx=15, pady=(4, 0))
+        self.lbl_bldg_min_area = ctk.CTkLabel(card_bldg, text="Mindestfläche (6 px²):", font=ctk.CTkFont(size=11))
+        self.lbl_bldg_min_area.pack(anchor="w", padx=12, pady=(4, 0))
 
-        self.slider_bldg_area = ctk.CTkSlider(self.right_sidebar, from_=4, to=40, number_of_steps=36, command=self._on_bldg_area_changed)
+        self.slider_bldg_area = ctk.CTkSlider(card_bldg, from_=4, to=40, number_of_steps=36, command=self._on_bldg_area_changed)
         self.slider_bldg_area.set(6)
-        self.slider_bldg_area.pack(fill="x", padx=15, pady=2)
+        self.slider_bldg_area.pack(fill="x", padx=12, pady=2)
 
-        # Checkboxes for terrace filtering, rectangle regularization, and orthogonal snapping
         self.cb_filter_terraces_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.right_sidebar, text="🍇 Weinberg-Terrassen & Schraffen filtern", variable=self.cb_filter_terraces_var, font=ctk.CTkFont(size=11)).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkCheckBox(card_bldg, text="🍇 Weinberg-Terrassen & Schraffen filtern", variable=self.cb_filter_terraces_var, font=ctk.CTkFont(size=11)).pack(anchor="w", padx=12, pady=2)
 
         self.cb_regularize_rect_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.right_sidebar, text="📐 Einzelhäuser zu 4-Eck-Rechtecken", variable=self.cb_regularize_rect_var, font=ctk.CTkFont(size=11)).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkCheckBox(card_bldg, text="📐 Einzelhäuser zu 4-Eck-Rechtecken", variable=self.cb_regularize_rect_var, font=ctk.CTkFont(size=11)).pack(anchor="w", padx=12, pady=2)
 
         self.cb_regularize_ortho_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self.right_sidebar, text="🏛️ Hofanlagen 90° orthogonal ausrichten", variable=self.cb_regularize_ortho_var, font=ctk.CTkFont(size=11)).pack(anchor="w", padx=15, pady=2)
+        ctk.CTkCheckBox(card_bldg, text="🏛️ Hofanlagen 90° orthogonal ausrichten", variable=self.cb_regularize_ortho_var, font=ctk.CTkFont(size=11)).pack(anchor="w", padx=12, pady=2)
 
-        # Extraction on whole map button & clear button
         btn_auto_all_bldgs = ctk.CTkButton(
-            self.right_sidebar,
+            card_bldg,
             text="⚡ Alle Gebäude der Karte extrahieren",
             command=self._run_auto_buildings,
             fg_color="#c0392b", hover_color="#e74c3c",
             height=36, font=ctk.CTkFont(size=12, weight="bold")
         )
-        btn_auto_all_bldgs.pack(fill="x", padx=15, pady=(10, 4))
+        btn_auto_all_bldgs.pack(fill="x", padx=12, pady=(8, 3))
 
         btn_clear_bldgs = ctk.CTkButton(
-            self.right_sidebar,
+            card_bldg,
             text="🧹 Nur Gebäude-Layer leeren",
             command=self._clear_buildings_layer,
-            fg_color="#333333", hover_color="#555555",
+            fg_color="#7f8c8d", hover_color="#95a5a6",
             height=28, font=ctk.CTkFont(size=11)
         )
-        btn_clear_bldgs.pack(fill="x", padx=15, pady=(2, 16))
+        btn_clear_bldgs.pack(fill="x", padx=12, pady=(2, 12))
 
     def _create_section_label(self, parent, text: str):
-        lbl = ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(size=12, weight="bold"), text_color="#3498db")
-        lbl.pack(anchor="w", padx=15, pady=(12, 4))
+        lbl = ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(size=12, weight="bold"), text_color=THEME_TEXT_SECTION)
+        lbl.pack(anchor="w", padx=12, pady=(8, 4))
+
+    def _on_theme_changed(self, choice: str):
+        if "Hell" in choice:
+            ctk.set_appearance_mode("Light")
+        elif "Dunkel" in choice:
+            ctk.set_appearance_mode("Dark")
+        else:
+            ctk.set_appearance_mode("System")
+        self.canvas.update_theme()
+        self.lbl_status.configure(text=f"Erscheinungsbild gewechselt zu: {choice}")
 
     def _on_deyellow_slider_moved(self, val: float):
         self.lbl_deyellow_header.configure(text=f"Entgilbung / Weißabgleich ({int(val*100)}%):")
@@ -968,22 +1030,21 @@ class TranchotDesktopApp(ctk.CTk):
         status_txt = "Restaurierte Farben (Weißabgleich & Leuchtkraft)" if new_state else "Originale Kartenfarben (Roh)"
         self.lbl_status.configure(text=f"Ansicht gewechselt zu: {status_txt}")
 
-    def _build_palette_class_list(self):
-        """Builds quick visual swatches and 1-click extract buttons for all classes in right sidebar."""
+    def _build_palette_class_list_inside(self, parent):
         for item in PipetteSampler.DEFAULT_CLASSES:
             cid = item["class_id"]
             lbl_text = item["label"]
             init_hex = item["hex"]
 
-            row = ctk.CTkFrame(self.right_sidebar, fg_color="#1c1f27", height=34)
-            row.pack(fill="x", padx=15, pady=2)
+            row = ctk.CTkFrame(parent, fg_color=THEME_SWATCH_FRAME, height=32)
+            row.pack(fill="x", padx=12, pady=2)
 
             swatch = tk.Label(row, text="", bg=init_hex, width=2, height=1)
-            swatch.pack(side="left", padx=(6, 4), pady=4)
+            swatch.pack(side="left", padx=(6, 4), pady=3)
             self.swatch_boxes[cid] = swatch
 
             btn_select = ctk.CTkButton(
-                row, text=lbl_text, width=150, height=24, fg_color="transparent", hover_color="#2a2e39",
+                row, text=lbl_text, width=150, height=24, fg_color="transparent",
                 font=ctk.CTkFont(size=11), anchor="w",
                 command=lambda c=cid, l=lbl_text: self._activate_class_pipette(c, l)
             )
@@ -1038,14 +1099,12 @@ class TranchotDesktopApp(ctk.CTk):
             self.lbl_tol_header.configure(text=f"Toleranz / Farbabstand (ΔE = {int(val)}):")
 
     def handle_pipette_sample_at(self, ix: float, iy: float):
-        """Samples color from the active restored map and updates the active pipette swatch."""
         if self.current_np is None:
             return
 
         sample = self.sampler.sample_from_coordinate(self.current_np, self.active_pipette_class, ix, iy, radius=4)
         self._update_active_swatch_display()
         
-        # If paper was sampled, automatically re-balance the map with this exact paper reference!
         if self.active_pipette_class == "paper":
             self._apply_enhancement_settings()
             self.lbl_status.configure(text=f"📜 Pergament-Referenz gesetzt auf RGB{tuple(sample.rgb)} — Weißabgleich angepasst!")
@@ -1056,7 +1115,6 @@ class TranchotDesktopApp(ctk.CTk):
         self._run_extract_specific_class(self.active_pipette_class)
 
     def _run_extract_specific_class(self, class_id: str):
-        """Extracts polygons for a specific class using its sampled color and tolerance."""
         if self.current_np is None:
             return
 
@@ -1084,17 +1142,15 @@ class TranchotDesktopApp(ctk.CTk):
         self.lbl_status.configure(text=f"✅ {count} Flächen für '{label}' erfolgreich extrahiert!")
 
     def _run_extract_all_sampled_classes(self):
-        """Extracts all active sampled classes simultaneously."""
         if self.current_np is None:
             return
 
-        self.lbl_status.configure(text="Extrahiere alle kalibrierten Klassen...")
+        self.lbl_status.configure(text="Extrahiere alle kalibrierten Klassen kompetitiv...")
         self.update_idletasks()
 
         threading.Thread(target=self._async_extract_all_classes, daemon=True).start()
 
     def handle_landuse_roi_box(self, ix0: float, iy0: float, ix1: float, iy1: float):
-        """Extracts competitive land-use polygons inside drawn ROI box for instant parameter testing."""
         if self.current_np is None:
             return
 
@@ -1122,7 +1178,6 @@ class TranchotDesktopApp(ctk.CTk):
     def _async_extract_all_classes(self):
         try:
             total_added = 0
-            # Run competitive multi-class segmentation over all active classes
             all_res = self.sampler.extract_competitive_polygons(self.current_np)
             for cid, polys in all_res.items():
                 if polys:
@@ -1138,7 +1193,6 @@ class TranchotDesktopApp(ctk.CTk):
         self.lbl_status.configure(text=f"Fertig: {total_count} Flächen über alle Klassen extrahiert (kompetitiv, 0 Überlappung)!")
 
     def _run_auto_landuse(self):
-        """Full multi-scale automated land-use extraction."""
         if self.current_np is None:
             return
 
@@ -1226,7 +1280,6 @@ class TranchotDesktopApp(ctk.CTk):
         dx = abs(ix1 - ix0)
         dy = abs(iy1 - iy0)
 
-        # If click without drag, do single building extract
         if dx < 6 and dy < 6:
             self.extract_single_building_at(ix0, iy0)
             return
@@ -1247,7 +1300,6 @@ class TranchotDesktopApp(ctk.CTk):
         result = extractor.extract(crop_rgb)
         elapsed = time.time() - t0
 
-        # Remove existing buildings located inside this ROI box to allow clean re-testing
         box_polygon = Polygon([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
         self.extracted_buildings = [
             p for p in self.extracted_buildings if not box_polygon.contains(p.centroid)
@@ -1331,6 +1383,7 @@ class TranchotDesktopApp(ctk.CTk):
         names = {
             "pipette": "🎨 Farb-Pipette (Klick zum Samplen)",
             "bldg_box": "📐 Gebäude ROI-Box (Rechteck aufziehen zum Testen & Extrahieren)",
+            "landuse_box": "🌲 Flächen ROI-Box (Rechteck aufziehen zum Testen & Extrahieren)",
             "extract": "🏛️ Gebäude-Klick (Einzelnes Gebäude anklicken)",
             "road_snap": "🛣️ Straßen-Nachverfolgung (Klick Startpunkt ➔ Endpunkt)",
             "toponym": "🏷️ Beschriftung aufziehen (Rechteck mit Maus um Text ziehen)",
@@ -1395,7 +1448,6 @@ class TranchotDesktopApp(ctk.CTk):
             if os.path.exists(palette_file):
                 self.sampler.load_palette(palette_file)
 
-            # Apply initial white balance & enhancement
             self._apply_enhancement_settings()
             self.canvas.reset_view()
 
@@ -1680,7 +1732,6 @@ class TranchotDesktopApp(ctk.CTk):
             return
 
         try:
-            # Helper to create styled and CRS-aware GeoDataFrame
             def make_gdf(records: List[Dict], geometries: List[Any], layer_key: str) -> gpd.GeoDataFrame:
                 color_spec = LAYER_COLOR_SPECS.get(layer_key, {"name": layer_key, "fill": "#888888", "stroke": "#ffffff"})
                 for rec in records:
@@ -1688,7 +1739,6 @@ class TranchotDesktopApp(ctk.CTk):
                     rec["stroke_color"] = color_spec["stroke"]
                     rec["layer_name"] = color_spec["name"]
                 
-                # Transform pixel geoms to target CRS if georeference is present
                 transformed_geoms = []
                 has_transform = (self.geo_handler and getattr(self.geo_handler, "transform", None) is not None)
                 src_crs = str(self.geo_handler.crs).upper() if (self.geo_handler and self.geo_handler.crs) else "EPSG:3857"

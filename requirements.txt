@@ -1,0 +1,29 @@
+# Core Computer Vision & Imaging
+numpy>=1.24.0
+opencv-python>=4.8.0
+pillow>=10.0.0
+scikit-image>=0.21.0
+
+# Geospatial & Vectorization
+shapely>=2.0.0
+geopandas>=0.14.0
+rasterio>=1.3.0
+pyproj>=3.6.0
+
+# Graph Theory & Road Network Analysis
+skan>=0.11.0
+networkx>=3.0
+
+# Text Recognition & Toponym Extraction
+easyocr>=1.7.0
+
+# Modern GUI & Data Science
+customtkinter>=5.2.0
+pandas>=2.0.0
+scipy>=1.10.0
+
+# AI & Machine Learning Segmentation (Optional CUDA acceleration)
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.36.0
+label-studio-sdk>=0.0.34

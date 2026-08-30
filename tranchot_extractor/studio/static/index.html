@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🏛️ Tranchot Label Studio — WebGIS & SAM AI Annotator</title>
+  
+  <!-- Leaflet CSS & JS for 60fps Pan, Zoom, and Vector Rendering -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Leaflet Geoman for Editable Polygons and Shapes -->
+  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.css" />
+  <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.min.js"></script>
+
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header class="top-header">
+    <div class="logo-area">
+      <span class="logo-icon">🏛️</span>
+      <span class="logo-title">Tranchot <span>Label Studio</span></span>
+    </div>
+
+    <div class="header-center">
+      <select id="presetSelect" class="preset-select">
+        <option value="">Lade Kartenblätter...</option>
+      </select>
+      <button id="btnFitView" class="btn" title="Ansicht auf gesamtes Bild einpassen">🔍 Gesamtansicht</button>
+    </div>
+
+    <div class="header-actions">
+      <button id="btnAutoSAM" class="btn btn-primary" title="Automatische Baukörper-Erkennung">🤖 SAM Auto-Assistent</button>
+      <button id="btnRunOCR" class="btn" title="Historische Ortsnamen erkennen">🏷️ OCR Text</button>
+      <button id="btnExport" class="btn btn-accent">💾 Exportieren</button>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <div class="main-workspace">
+
+    <!-- Left Toolbar -->
+    <aside class="tools-sidebar">
+      <button class="tool-btn active" data-tool="sam" id="toolSAM" title="SAM Punkt-Klick (W) - Klicke auf ein Gebäude!">
+        🎯
+        <span class="badge">W</span>
+      </button>
+      <button class="tool-btn" data-tool="sam_box" id="toolSAMBox" title="SAM Smart-Box (B / R) - Ziehe ein Rechteck um das Haus!">
+        🔲
+        <span class="badge">B</span>
+      </button>
+      <button class="tool-btn" data-tool="draw_poly" id="toolPoly" title="Polygon manuell zeichnen (P)">
+        ✏️
+        <span class="badge">P</span>
+      </button>
+      <button class="tool-btn" data-tool="edit" id="toolEdit" title="Polygone bearbeiten / Punkte verschieben (E)">
+        📐
+        <span class="badge">E</span>
+      </button>
+      <div class="tools-divider"></div>
+      <button class="tool-btn" data-tool="pan" id="toolPan" title="Karten-Navigation / Pan (H)">
+        🖐️
+        <span class="badge">H</span>
+      </button>
+    </aside>
+
+    <!-- Center WebGIS Leaflet Map Container -->
+    <main class="canvas-container" id="canvasContainer">
+
+      <!-- Class Palette (Floating Header) -->
+      <div class="class-palette-bar">
+        <div class="class-chip active" data-id="building" data-name="Gebäude" data-color="#ef4444" style="background: rgba(239, 68, 68, 0.2); color: #ef4444;">
+          <span class="dot" style="background: #ef4444;"></span> [1] 🏛️ Gebäude
+        </div>
+        <div class="class-chip" data-id="farm" data-name="Hofanlage" data-color="#dc2626" style="background: rgba(220, 38, 38, 0.2); color: #dc2626;">
+          <span class="dot" style="background: #dc2626;"></span> [2] 🏰 Hofanlage
+        </div>
+        <div class="class-chip" data-id="road" data-name="Straße" data-color="#3b82f6" style="background: rgba(59, 130, 246, 0.2); color: #3b82f6;">
+          <span class="dot" style="background: #3b82f6;"></span> [3] 🛣️ Straße
+        </div>
+        <div class="class-chip" data-id="path" data-name="Feldweg" data-color="#60a5fa" style="background: rgba(96, 165, 250, 0.2); color: #60a5fa;">
+          <span class="dot" style="background: #60a5fa;"></span> [4] 🛤️ Feldweg
+        </div>
+        <div class="class-chip" data-id="water" data-name="Gewässer" data-color="#06b6d4" style="background: rgba(6, 182, 212, 0.2); color: #06b6d4;">
+          <span class="dot" style="background: #06b6d4;"></span> [5] 🌊 Gewässer
+        </div>
+        <div class="class-chip" data-id="text" data-name="Toponym" data-color="#f59e0b" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b;">
+          <span class="dot" style="background: #f59e0b;"></span> [6] 🏷️ Toponym
+        </div>
+        <div class="class-chip" data-id="veg" data-name="Vegetation" data-color="#10b981" style="background: rgba(16, 185, 129, 0.2); color: #10b981;">
+          <span class="dot" style="background: #10b981;"></span> [7] 🌲 Wald/Baum
+        </div>
+        <div style="width: 1px; height: 18px; background: var(--border); margin: 0 4px;"></div>
+        <div class="granularity-container" style="display: flex; gap: 4px;">
+          <button class="gran-btn active" data-gran="compact" title="Einzelnes Gebäude präzise isolieren">🔹 Einzelhaus</button>
+          <button class="gran-btn" data-gran="medium" title="Hofanlage / Häuserblock">🏰 Hof / Block</button>
+          <button class="gran-btn" data-gran="large" title="Großes Areal / Parzelle">🗺️ Areal</button>
+        </div>
+      </div>
+
+      <!-- Leaflet Map Container -->
+      <div id="map" style="width: 100%; height: 100%;"></div>
+
+      <!-- SAM Action Banner -->
+      <div class="sam-action-banner" id="samActionBanner">
+        <div class="banner-info">
+          <span>✨ SAM Segmentierung aktiv</span>
+          <span class="iou-badge" id="bannerIou">IoU: 96%</span>
+          <span id="bannerArea">Fläche: 1420 px²</span>
+        </div>
+        <button id="btnCommitSAM" class="btn btn-primary">✅ Übernehmen (Enter)</button>
+        <button id="btnCancelSAM" class="btn">❌ Verwerfen (Esc)</button>
+      </div>
+
+      <!-- Canvas Status Bar -->
+      <div class="canvas-status">
+        <span id="statusMsg">Bereit.</span>
+        <span id="statusCoords">X: 0, Y: 0 px</span>
+        <span id="statusZoom">Zoom: 100%</span>
+      </div>
+
+    </main>
+
+    <!-- Right Sidebar: Object List & Inspector -->
+    <aside class="right-sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-title">Gelabelte Objekte</span>
+        <span class="obj-count-badge" id="objCount">0</span>
+      </div>
+
+      <div class="object-list" id="objectList">
+        <!-- Dynamic object items -->
+      </div>
+
+      <div class="sidebar-footer">
+        <div style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.45;">
+          💡 <strong>Bedienung & Tastatur-Kürzel:</strong><br>
+          • <strong>Mausrad:</strong> Stufenloser Zoom (10%–1000%)<br>
+          • <strong>Maus ziehen:</strong> Karte stufenlos verschieben (Pan)<br>
+          • <strong>Linksklick:</strong> Positiver SAM-Punkt [+] auf Baukörper<br>
+          • <strong>Shift / Rechtsklick:</strong> Negativer SAM-Punkt [-]<br>
+          • <strong>Enter:</strong> SAM-Polygon übernehmen<br>
+          • <strong>1–7:</strong> Kategorie wählen | <strong>E:</strong> Eckpunkte editieren
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Export Modal -->
+  <div class="modal-backdrop" id="exportModal">
+    <div class="modal-card">
+      <h3 style="color: var(--accent);">💾 GIS- & Trainingsdaten Export</h3>
+      <p style="font-size: 0.85rem; color: var(--text-muted);">Wähle das Format für den Export aller annotierten Layer:</p>
+      
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <button class="btn btn-primary export-format-btn" data-format="geojson">
+          🌍 <strong>GeoJSON</strong> (Standard GIS-Vektorlayer)
+        </button>
+        <button class="btn export-format-btn" data-format="gpkg">
+          📦 <strong>GeoPackage (.gpkg)</strong> (QGIS / ArcGIS Multi-Layer)
+        </button>
+        <button class="btn export-format-btn" data-format="label_studio">
+          🏷️ <strong>Label Studio JSON</strong> (Direkter Import in Label Studio)
+        </button>
+        <button class="btn export-format-btn" data-format="coco">
+          🤖 <strong>COCO JSON</strong> (Für Deep-Learning Segmentation Training)
+        </button>
+      </div>
+
+      <button id="btnCloseExportModal" class="btn" style="margin-top: 6px;">Schließen</button>
+    </div>
+  </div>
+
+  <script src="/static/js/studio.js"></script>
+</body>
+</html>

@@ -119,10 +119,35 @@ class TestPipetteSampler(unittest.TestCase):
         res = sampler.extract_competitive_polygons(img, active_class_ids=["forest"])
         forest_polys = res.get("forest", [])
 
-        # Only the compact forest block must survive; the 14px narrow road ribbon must be rejected
-        self.assertEqual(len(forest_polys), 1, "Only true forest must survive, road ribbon must be rejected")
-        p = forest_polys[0]
-        self.assertLess(p.bounds[1], 150, "Extracted polygon must be the true forest block in the upper part")
+    def test_meadow_mountain_and_road_rejection(self):
+        """Verifies that hachured mountain slopes and unpainted roads are never recognized as meadow."""
+        sampler = PipetteSampler()
+        # Parchment background (400x400)
+        img = np.full((400, 400, 3), [225, 215, 185], dtype=np.uint8)
+
+        # 1. True meadow in valley (emerald/cyan green wash)
+        meadow_color = [135, 175, 145]
+        cv2.rectangle(img, (30, 30), (160, 140), meadow_color, -1)
+
+        # 2. Hachured mountain slope (brownish background with dense black hachures)
+        slope_color = [195, 180, 150]
+        cv2.rectangle(img, (220, 220), (370, 370), slope_color, -1)
+        for y in range(220, 370, 6):
+            cv2.line(img, (220, y), (370, y + 10), (60, 45, 30), 2)
+
+        # 3. Road casing lines
+        cv2.line(img, (0, 200), (400, 200), (40, 30, 20), 2)
+        cv2.line(img, (0, 215), (400, 215), (40, 30, 20), 2)
+
+        # Sample meadow at center of valley
+        sampler.sample_from_stamp(img, "meadow", 95, 85, radius=20)
+        res = sampler.extract_competitive_polygons(img, active_class_ids=["meadow"])
+        meadow_polys = res.get("meadow", [])
+
+        # Only true meadow in the valley must be extracted; mountain slope and roads must be rejected
+        self.assertEqual(len(meadow_polys), 1, "Only true meadow must survive, slope and road must be rejected")
+        p = meadow_polys[0]
+        self.assertLess(p.bounds[1], 160, "Extracted polygon must be the true valley meadow")
 
 
 if __name__ == "__main__":

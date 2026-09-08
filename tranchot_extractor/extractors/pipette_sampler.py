@@ -239,12 +239,13 @@ class PipetteSampler:
         elif "meadow" in cid or "wiese" in cid or "weide" in cid:
             # Captures pure cyan-green/yellow-green meadow watercolor washes while strictly rejecting unpainted paper & hachures
             is_pigment = (
-                (a_chan <= 125.0) &
-                (b_chan < 138.0) &
-                (l_chan >= 95.0) &
-                (l_chan <= 245.0) &
-                (sat >= 10.0) &
-                ((g_crop >= r_crop + 2) | (b_crop >= r_crop + 2)) &
+                (a_chan <= 123.8) &
+                (b_chan < 140.0) &
+                (l_chan >= 90.0) &
+                (l_chan <= 242.0) &
+                (sat >= 6.0) &
+                (g_crop >= r_crop + 2) &
+                (g_crop >= b_crop - 6) &
                 (~is_paper) & (~is_hachure_ink)
             )
         elif "water" in cid or "gewässer" in cid or "wasser" in cid or "see" in cid or "bach" in cid:
@@ -456,12 +457,13 @@ class PipetteSampler:
             )
         elif "meadow" in cid or "wiese" in cid or "weide" in cid:
             is_pigment = (
-                (a_chan <= 125.0) &
-                (b_chan < 138.0) &
-                (l_chan >= 95.0) &
-                (l_chan <= 245.0) &
-                (sat >= 10.0) &
-                ((g_img >= r_img + 2) | (b_img >= r_img + 2)) &
+                (a_chan <= 123.8) &
+                (b_chan < 140.0) &
+                (l_chan >= 90.0) &
+                (l_chan <= 242.0) &
+                (sat >= 6.0) &
+                (g_img >= r_img + 2) &
+                (g_img >= b_img - 6) &
                 (~is_paper) & (~is_ink)
             )
         elif "water" in cid or "gewässer" in cid or "wasser" in cid:
@@ -646,23 +648,35 @@ class PipetteSampler:
         g_p = pigment_rgb[:, :, 1].astype(int)
         b_p = pigment_rgb[:, :, 2].astype(int)
 
-        # 3. Paper / Road Baseline Barrier
+        # 3. Paper / Road Baseline Barrier & Mountain Relief Hachures
         # Neutral parchment (roads, bare fields, uncolored margins)
         is_pure_paper = (
-            ((l_chan > 185.0) & (a_chan >= 126.0) & (g_p <= r_p + 2) & (sat < 36.0)) |
-            ((sat < 16.0) & (chroma < 6.0) & (l_chan > 175.0))
+            ((l_chan > 175.0) & (a_chan >= 125.0) & (g_p <= r_p + 2) & (sat < 32.0)) |
+            ((sat < 16.0) & (chroma < 6.0) & (l_chan > 165.0))
         )
         d_paper_base = np.sqrt(
-            ((a_chan - 128.0) / 2.5) ** 2 +
-            ((b_chan - 130.0) / 3.5) ** 2
-        ) + (np.abs(l_chan - 225.0) / 45.0)
+            ((a_chan - 128.0) / 2.0) ** 2 +
+            ((b_chan - 132.0) / 2.8) ** 2
+        ) + (np.abs(l_chan - 220.0) / 35.0)
         d_paper = np.where(is_pure_paper, 0.0, d_paper_base)
 
+        # Baseline: Mountain Relief / Slope Hachures (Schraffen auf Bergen/Hängen ohne Grünlasur)
+        # Directional ink hachures + high texture energy + warm brownish terrain shading (R > G, a* >= 124.0)
+        hatch_density = cv2.boxFilter(is_ink_stroke.astype(np.float32), -1, (15, 15))
+        is_relief_slope = (
+            ((hatch_density > 0.12) | ((tex_energy > 20.0) & (dir_coh > 0.35))) &
+            (r_p >= g_p - 1) &
+            (a_chan >= 124.0) &
+            (r_p > b_p + 4) &
+            (l_chan <= 220.0)
+        )
+        d_relief_slope = np.where(is_relief_slope, 0.1, 6.0)
+
         # 4. Compute Distance Volume for Active Classes
-        dist_maps = [d_paper]  # Index 0 is Paper Background
+        dist_maps = [d_paper, d_relief_slope]  # Index 0: Paper, Index 1: Mountain Relief
         water_grid_idx = None
 
-        for idx, sample in enumerate(active_classes, 1):
+        for idx, sample in enumerate(active_classes, 2):
             cid = sample.class_id.lower()
             if "water" in cid or "gewässer" in cid or "wasser" in cid:
                 water_grid_idx = idx
@@ -725,11 +739,15 @@ class PipetteSampler:
             (sat >= 10.0) & (~is_pure_paper)
         )
         gate_meadow = (
-            (a_chan <= 125.0) &
-            (sat >= 10.0) &
-            (l_chan <= 245.0) &
-            ((g_p >= r_p + 2) | (b_p >= r_p + 2)) &
-            (~is_pure_paper)
+            (a_chan <= 123.8) &
+            (g_p >= r_p + 2.0) &
+            (g_p >= b_p - 6.0) &
+            (r_p < g_p + 1.0) &
+            (l_chan >= 90.0) &
+            (l_chan <= 242.0) &
+            (sat >= 6.0) &
+            (~is_pure_paper) &
+            (~is_relief_slope)
         )
         gate_water = (b_chan <= 128.5) & (b_p >= r_p - 5) & (~is_pure_paper)
         gate_warm = (a_chan >= 128.0) & (r_p >= b_p + 2) & (~is_pure_paper)
@@ -742,17 +760,17 @@ class PipetteSampler:
         border_mask[6:sh-6, 6:sw-6] = True
         valid_collar = (~(is_black | is_white)) & border_mask
 
-        # 6. Discrete Winner Grid (0 = Paper, 1..N = Classes)
+        # 6. Discrete Winner Grid (0 = Paper, 1 = Mountain Relief, 2..N+1 = Classes)
         winner_grid = np.zeros((sh, sw), dtype=np.uint8)
 
-        for idx, sample in enumerate(active_classes, 1):
+        for idx, sample in enumerate(active_classes, 2):
             cid = sample.class_id.lower()
             if "forest" in cid or "wald" in cid:
                 gate = gate_forest
                 max_allowed_dist = 4.2
             elif "meadow" in cid or "wiese" in cid or "weide" in cid or "garden" in cid or "garten" in cid:
                 gate = gate_meadow
-                max_allowed_dist = 4.0
+                max_allowed_dist = 3.8
             elif "water" in cid or "gewässer" in cid or "wasser" in cid:
                 gate = gate_water
                 max_allowed_dist = 4.2
@@ -763,12 +781,12 @@ class PipetteSampler:
                 gate = (~is_pure_paper)
                 max_allowed_dist = 4.2
 
-            c_mask = ((winner_idx == idx) & (min_dists <= max_allowed_dist) & gate & valid_collar & (~is_pure_paper))
+            c_mask = ((winner_idx == idx) & (min_dists <= max_allowed_dist) & gate & valid_collar & (~is_pure_paper) & (~is_relief_slope))
 
             if "meadow" in cid or "wiese" in cid or "weide" in cid:
                 # Local density filtering to prevent road-side ditch fringe and field dots from leaking
-                density = cv2.boxFilter(c_mask.astype(np.float32), -1, (17, 17))
-                c_mask = (density >= 0.22) & gate & (~is_pure_paper)
+                density = cv2.boxFilter(c_mask.astype(np.float32), -1, (15, 15))
+                c_mask = (density >= 0.28) & gate & (~is_pure_paper) & (~is_relief_slope)
 
             winner_grid[c_mask] = idx
 
@@ -781,7 +799,7 @@ class PipetteSampler:
         # 7. Vectorize each class with specialized geometry pipelines
         results: Dict[str, List[Polygon]] = {}
 
-        for idx, sample in enumerate(active_classes, 1):
+        for idx, sample in enumerate(active_classes, 2):
             c_mask = (winner_grid_clean == idx).astype(np.uint8) * 255
 
             if np.count_nonzero(c_mask) == 0:
@@ -810,8 +828,9 @@ class PipetteSampler:
                 k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
                 mask_closed = cv2.morphologyEx(c_mask, cv2.MORPH_CLOSE, k_close)
                 mask_closed[is_pure_paper] = 0
+                mask_closed[is_relief_slope] = 0
                 mask_clean = mask_closed
-                min_area = 150.0
+                min_area = 250.0
                 approx_eps = 0.5
                 min_hole_area = 500.0 * (scale_factor ** 2)
             else:
@@ -899,10 +918,10 @@ class PipetteSampler:
                                         aspect = max(edge1, edge2) / (min_thick + 1e-4)
                                         # Reject narrow road ribbons & linear ditch strips
                                         if p.area < 25000.0:
-                                            if min_thick < 30.0 or aspect > 2.8:
+                                            if min_thick < 25.0 or aspect > 3.0:
                                                 return False
                                         else:
-                                            if min_thick < 25.0 and aspect > 5.0:
+                                            if min_thick < 20.0 and aspect > 5.0:
                                                 return False
                             except Exception:
                                 pass

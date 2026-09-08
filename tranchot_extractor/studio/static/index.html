@@ -1,178 +1,338 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="de" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>🏛️ Tranchot Label Studio — WebGIS & SAM AI Annotator</title>
+  <title>🏛️ Tranchot WebGIS Studio — 60 FPS GPU Farblernen, Gebäude & Vektorisierung</title>
   
-  <!-- Leaflet CSS & JS for 60fps Pan, Zoom, and Vector Rendering -->
+  <!-- Leaflet CSS & JS for 60fps GPU Hardware Accelerated WebGL/Canvas Rendering -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <!-- Leaflet Geoman for Editable Polygons and Shapes -->
-  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.css" />
-  <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.min.js"></script>
+  <!-- Google Fonts: Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
 
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
 
-  <!-- Top Header -->
+  <!-- Top Navigation Header -->
   <header class="top-header">
     <div class="logo-area">
       <span class="logo-icon">🏛️</span>
-      <span class="logo-title">Tranchot <span>Label Studio</span></span>
+      <div class="logo-text">
+        <span class="logo-title">Tranchot <span class="logo-accent">WebGIS</span></span>
+        <span class="logo-badge">60 FPS GPU</span>
+      </div>
     </div>
 
     <div class="header-center">
-      <select id="presetSelect" class="preset-select">
-        <option value="">Lade Kartenblätter...</option>
-      </select>
-      <button id="btnFitView" class="btn" title="Ansicht auf gesamtes Bild einpassen">🔍 Gesamtansicht</button>
+      <div class="preset-wrapper">
+        <label for="presetSelect">🗺️ Blatt:</label>
+        <select id="presetSelect" class="preset-select">
+          <option value="">Lade Kartenblätter...</option>
+        </select>
+      </div>
+
+      <button id="btnUploadMap" class="btn btn-secondary" title="Eigenes GeoTIFF oder PNG laden">📁 Datei laden</button>
+      <input type="file" id="fileInputMap" accept=".tif,.tiff,.png,.jpg,.jpeg" style="display: none;">
+
+      <button id="btnFitView" class="btn btn-secondary" title="Kartenansicht zentrieren und einpassen">🔍 Gesamtansicht</button>
     </div>
 
     <div class="header-actions">
-      <button id="btnAutoSAM" class="btn btn-primary" title="Automatische Baukörper-Erkennung">🤖 SAM Auto-Assistent</button>
-      <button id="btnRunOCR" class="btn" title="Historische Ortsnamen erkennen">🏷️ OCR Text</button>
-      <button id="btnExport" class="btn btn-accent">💾 Exportieren</button>
+      <button id="btnThemeToggle" class="btn btn-secondary" title="Zwischen Hell- und Dunkelmodus wechseln">☀️ Hell</button>
+      <button id="btnQuickNormalize" class="btn btn-glow" title="1-Klick Papier reinweiß und Schraffen tiefschwarz setzen">🪄 100% Normierung</button>
+      <button id="btnExtractBuildingsTop" class="btn btn-danger" title="Extrahiert alle 90°-orthogonale Gebäude und Hofanlagen">🏛️ Gebäude</button>
+      <button id="btnExtractLandUse" class="btn btn-primary" title="Berechnet alle gelernten Landnutzungen kompetitiv ohne Überlappung">⚡ Flächen berechnen</button>
+      
+      <div class="dropdown-container">
+        <button id="btnExportMenu" class="btn btn-accent">💾 Export ▾</button>
+        <div class="dropdown-menu" id="exportDropdown">
+          <a href="#" id="exportGeoJSON">🗺️ GeoJSON (.geojson)</a>
+          <a href="#" id="exportShapefile">📦 ESRI Shapefile (.zip)</a>
+          <a href="#" id="exportGPKG">🗄️ GeoPackage (.gpkg)</a>
+        </div>
+      </div>
     </div>
   </header>
 
   <!-- Main Workspace -->
   <div class="main-workspace">
 
-    <!-- Left Toolbar -->
+    <!-- Left Tool Sidebar -->
     <aside class="tools-sidebar">
-      <button class="tool-btn active" data-tool="sam" id="toolSAM" title="SAM Punkt-Klick (W) - Klicke auf ein Gebäude!">
-        🎯
-        <span class="badge">W</span>
+      <button class="tool-btn active" data-tool="stamp" id="toolStamp" title="Farbmuster-Stempel (S) – Klicke 3–10 Stellen auf der Karte an!">
+        <span class="icon">🖌️</span>
+        <span class="tool-name">Stempel</span>
+        <span class="badge">S</span>
       </button>
-      <button class="tool-btn" data-tool="sam_box" id="toolSAMBox" title="SAM Smart-Box (B / R) - Ziehe ein Rechteck um das Haus!">
-        🔲
-        <span class="badge">B</span>
-      </button>
-      <button class="tool-btn" data-tool="draw_poly" id="toolPoly" title="Polygon manuell zeichnen (P)">
-        ✏️
-        <span class="badge">P</span>
-      </button>
-      <button class="tool-btn" data-tool="edit" id="toolEdit" title="Polygone bearbeiten / Punkte verschieben (E)">
-        📐
-        <span class="badge">E</span>
-      </button>
-      <div class="tools-divider"></div>
-      <button class="tool-btn" data-tool="pan" id="toolPan" title="Karten-Navigation / Pan (H)">
-        🖐️
+
+      <button class="tool-btn" data-tool="pan" id="toolPan" title="Karte verschieben / Navigation (H)">
+        <span class="icon">🖐️</span>
+        <span class="tool-name">Pan</span>
         <span class="badge">H</span>
       </button>
     </aside>
 
-    <!-- Center WebGIS Leaflet Map Container -->
+    <!-- Center Leaflet GPU Canvas -->
     <main class="canvas-container" id="canvasContainer">
+      <div id="map"></div>
 
-      <!-- Class Palette (Floating Header) -->
-      <div class="class-palette-bar">
-        <div class="class-chip active" data-id="building" data-name="Gebäude" data-color="#ef4444" style="background: rgba(239, 68, 68, 0.2); color: #ef4444;">
-          <span class="dot" style="background: #ef4444;"></span> [1] 🏛️ Gebäude
-        </div>
-        <div class="class-chip" data-id="farm" data-name="Hofanlage" data-color="#dc2626" style="background: rgba(220, 38, 38, 0.2); color: #dc2626;">
-          <span class="dot" style="background: #dc2626;"></span> [2] 🏰 Hofanlage
-        </div>
-        <div class="class-chip" data-id="road" data-name="Straße" data-color="#3b82f6" style="background: rgba(59, 130, 246, 0.2); color: #3b82f6;">
-          <span class="dot" style="background: #3b82f6;"></span> [3] 🛣️ Straße
-        </div>
-        <div class="class-chip" data-id="path" data-name="Feldweg" data-color="#60a5fa" style="background: rgba(96, 165, 250, 0.2); color: #60a5fa;">
-          <span class="dot" style="background: #60a5fa;"></span> [4] 🛤️ Feldweg
-        </div>
-        <div class="class-chip" data-id="water" data-name="Gewässer" data-color="#06b6d4" style="background: rgba(6, 182, 212, 0.2); color: #06b6d4;">
-          <span class="dot" style="background: #06b6d4;"></span> [5] 🌊 Gewässer
-        </div>
-        <div class="class-chip" data-id="text" data-name="Toponym" data-color="#f59e0b" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b;">
-          <span class="dot" style="background: #f59e0b;"></span> [6] 🏷️ Toponym
-        </div>
-        <div class="class-chip" data-id="veg" data-name="Vegetation" data-color="#10b981" style="background: rgba(16, 185, 129, 0.2); color: #10b981;">
-          <span class="dot" style="background: #10b981;"></span> [7] 🌲 Wald/Baum
-        </div>
-        <div style="width: 1px; height: 18px; background: var(--border); margin: 0 4px;"></div>
-        <div class="granularity-container" style="display: flex; gap: 4px;">
-          <button class="gran-btn active" data-gran="compact" title="Einzelnes Gebäude präzise isolieren">🔹 Einzelhaus</button>
-          <button class="gran-btn" data-gran="medium" title="Hofanlage / Häuserblock">🏰 Hof / Block</button>
-          <button class="gran-btn" data-gran="large" title="Großes Areal / Parzelle">🗺️ Areal</button>
-        </div>
+      <!-- Floating Tool Notification / Banner -->
+      <div class="map-overlay-banner" id="mapBanner">
+        <span id="bannerText">🖌️ Stempel-Modus aktiv: Klicke auf Wald- oder Wiesenflächen, um Farbtöne aufzunehmen.</span>
       </div>
-
-      <!-- Leaflet Map Container -->
-      <div id="map" style="width: 100%; height: 100%;"></div>
-
-      <!-- SAM Action Banner -->
-      <div class="sam-action-banner" id="samActionBanner">
-        <div class="banner-info">
-          <span>✨ SAM Segmentierung aktiv</span>
-          <span class="iou-badge" id="bannerIou">IoU: 96%</span>
-          <span id="bannerArea">Fläche: 1420 px²</span>
-        </div>
-        <button id="btnCommitSAM" class="btn btn-primary">✅ Übernehmen (Enter)</button>
-        <button id="btnCancelSAM" class="btn">❌ Verwerfen (Esc)</button>
-      </div>
-
-      <!-- Canvas Status Bar -->
-      <div class="canvas-status">
-        <span id="statusMsg">Bereit.</span>
-        <span id="statusCoords">X: 0, Y: 0 px</span>
-        <span id="statusZoom">Zoom: 100%</span>
-      </div>
-
     </main>
 
-    <!-- Right Sidebar: Object List & Inspector -->
-    <aside class="right-sidebar">
-      <div class="sidebar-header">
-        <span class="sidebar-title">Gelabelte Objekte</span>
-        <span class="obj-count-badge" id="objCount">0</span>
-      </div>
+    <!-- Right Control Panel Sidebar -->
+    <aside class="control-sidebar">
 
-      <div class="object-list" id="objectList">
-        <!-- Dynamic object items -->
-      </div>
+      <!-- Section 0: Bildoptimierung & Weißabgleich -->
+      <div class="sidebar-card">
+        <div class="card-header" id="headerEnhance">
+          <span>✨ 0. Weißabgleich & Normierung</span>
+          <span class="toggle-icon">▾</span>
+        </div>
+        <div class="card-body" id="bodyEnhance">
+          <button id="btnPaper100" class="btn btn-full btn-glow-subtle">🪄 100% Papier-Weiß & Schraffen-Schwarz</button>
+          
+          <div class="control-row">
+            <div class="control-label">
+              <span>Entgilbung (Weißabgleich):</span>
+              <span id="lblDeyellowVal">85%</span>
+            </div>
+            <input type="range" id="sliderDeyellow" min="0" max="100" value="85" class="range-slider">
+          </div>
 
-      <div class="sidebar-footer">
-        <div style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.45;">
-          💡 <strong>Bedienung & Tastatur-Kürzel:</strong><br>
-          • <strong>Mausrad:</strong> Stufenloser Zoom (10%–1000%)<br>
-          • <strong>Maus ziehen:</strong> Karte stufenlos verschieben (Pan)<br>
-          • <strong>Linksklick:</strong> Positiver SAM-Punkt [+] auf Baukörper<br>
-          • <strong>Shift / Rechtsklick:</strong> Negativer SAM-Punkt [-]<br>
-          • <strong>Enter:</strong> SAM-Polygon übernehmen<br>
-          • <strong>1–7:</strong> Kategorie wählen | <strong>E:</strong> Eckpunkte editieren
+          <div class="control-row">
+            <div class="control-label">
+              <span>Farbbrillanz (Vibranz):</span>
+              <span id="lblVibranceVal">1.65x</span>
+            </div>
+            <input type="range" id="sliderVibrance" min="100" max="250" value="165" class="range-slider">
+          </div>
+
+          <div class="control-row">
+            <div class="control-label">
+              <span>Kontrast:</span>
+              <span id="lblContrastVal">1.00x</span>
+            </div>
+            <input type="range" id="sliderContrast" min="60" max="180" value="100" class="range-slider">
+          </div>
+
+          <div class="control-row-toggle">
+            <label class="toggle-switch">
+              <input type="checkbox" id="chkInkBlack" checked>
+              <span class="slider-toggle"></span>
+            </label>
+            <span class="toggle-label">✒️ Schraffen tiefschwarz färben</span>
+          </div>
+
+          <button id="btnApplyEnhance" class="btn btn-secondary btn-full">⚡ Bildfilter anwenden</button>
         </div>
       </div>
+
+      <!-- Section 1: Stempel-Lernen & Landnutzung -->
+      <div class="sidebar-card active">
+        <div class="card-header" id="headerLandUse">
+          <span>🌲 1. Stempel & Farblernen</span>
+          <span class="toggle-icon">▾</span>
+        </div>
+        <div class="card-body" id="bodyLandUse">
+          <div class="class-picker-grid">
+            <button class="class-tab active" data-class="forest" style="--c: #16a34a;">
+              <span class="class-tab-dot" style="background: #16a34a;"></span>
+              <span>🌲 Wald</span>
+            </button>
+            <button class="class-tab" data-class="meadow" style="--c: #0891b2;">
+              <span class="class-tab-dot" style="background: #0891b2;"></span>
+              <span>🌿 Wiese / Weide</span>
+            </button>
+            <button class="class-tab" data-class="water" style="--c: #2563eb;">
+              <span class="class-tab-dot" style="background: #2563eb;"></span>
+              <span>💧 Gewässer / See</span>
+            </button>
+            <button class="class-tab" data-class="vineyard" style="--c: #9333ea;">
+              <span class="class-tab-dot" style="background: #9333ea;"></span>
+              <span>🍇 Weinberge</span>
+            </button>
+            <button class="class-tab" data-class="gravel" style="--c: #ea580c;">
+              <span class="class-tab-dot" style="background: #ea580c;"></span>
+              <span>🟠 Kies / Sand</span>
+            </button>
+            <button class="class-tab" data-class="garden" style="--c: #ca8a04;">
+              <span class="class-tab-dot" style="background: #ca8a04;"></span>
+              <span>🟨 Gärten</span>
+            </button>
+          </div>
+
+          <div class="active-class-status-box">
+            <div class="status-swatch-wrapper">
+              <div class="color-swatch-box" id="activeClassSwatch" style="background: #16a34a;"></div>
+              <div class="swatch-details">
+                <strong id="activeClassName">🌲 Wald</strong>
+                <span id="activeClassStatus">0 Stempel gesetzt</span>
+              </div>
+            </div>
+            <button id="btnClearCurrentStamps" class="btn-icon-danger" title="Alle Stempel dieser Klasse löschen">🗑️</button>
+          </div>
+
+          <div class="control-row">
+            <div class="control-label">
+              <span>Stempel-Radius:</span>
+              <span id="lblStampRadiusVal">22 px (Mausrad: 2–120 px)</span>
+            </div>
+            <input type="range" id="sliderStampRadius" min="2" max="120" value="22" class="range-slider">
+          </div>
+
+          <div class="stamp-chips-container">
+            <div class="stamp-chips-header">
+              <span>Gesetzte Farbstempel:</span>
+            </div>
+            <div class="stamp-chips-list" id="stampChipsList">
+              <span class="empty-chips-msg">Noch keine Stempel. Klicke 3–10 Stellen auf der Karte an.</span>
+            </div>
+          </div>
+
+          <button id="btnRunLandUseExtraction" class="btn btn-primary btn-full btn-large">
+            ⚡ Gelernte Flächen berechnen
+          </button>
+        </div>
+      </div>
+
+      <!-- Section 2: Baukörper, Gebäude & Hofanlagen (90° Ortho) -->
+      <div class="sidebar-card active">
+        <div class="card-header" id="headerBuildings">
+          <span>🏛️ 2. Baukörper & Gebäude (90° Ortho)</span>
+          <span class="toggle-icon">▾</span>
+        </div>
+        <div class="card-body" id="bodyBuildings">
+          <button id="btnExtractBuildings" class="btn btn-danger btn-full btn-large">
+            🏛️ Alle Gebäude extrahieren (90° Ortho)
+          </button>
+
+          <div class="control-row-toggle">
+            <label class="toggle-switch">
+              <input type="checkbox" id="chkOrthoRegularization" checked>
+              <span class="slider-toggle"></span>
+            </label>
+            <span class="toggle-label">📐 90° Manhattan Begradigung (Höfe erhalten)</span>
+          </div>
+
+          <div class="control-row">
+            <div class="control-label">
+              <span>Min. Gebäudefläche:</span>
+              <span id="lblMinBldgArea">35 px²</span>
+            </div>
+            <input type="range" id="sliderMinBldgArea" min="15" max="200" value="35" class="range-slider">
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 3: Ebenen & Deckkraft -->
+      <div class="sidebar-card">
+        <div class="card-header" id="headerLayers">
+          <span>🗺️ 3. Vektor-Ebenen & Deckkraft</span>
+          <span class="toggle-icon">▾</span>
+        </div>
+        <div class="card-body" id="bodyLayers">
+          <div class="layer-item">
+            <label class="layer-chk">
+              <input type="checkbox" id="chkLayerForest" checked>
+              <span class="layer-dot" style="background: #16a34a;"></span>
+              <span>🌲 Wald (<span id="cntForest">0</span>)</span>
+            </label>
+            <input type="range" id="opacityForest" min="0" max="100" value="70" class="layer-slider">
+            <button class="btn-icon-danger btn-del-layer" data-layer="forest" title="Nur Wald-Ebene löschen">🗑️</button>
+          </div>
+
+          <div class="layer-item">
+            <label class="layer-chk">
+              <input type="checkbox" id="chkLayerMeadow" checked>
+              <span class="layer-dot" style="background: #0891b2;"></span>
+              <span>🌿 Wiese / Weide (<span id="cntMeadow">0</span>)</span>
+            </label>
+            <input type="range" id="opacityMeadow" min="0" max="100" value="70" class="layer-slider">
+            <button class="btn-icon-danger btn-del-layer" data-layer="meadow" title="Nur Wiesen-Ebene löschen">🗑️</button>
+          </div>
+
+          <div class="layer-item">
+            <label class="layer-chk">
+              <input type="checkbox" id="chkLayerWater" checked>
+              <span class="layer-dot" style="background: #2563eb;"></span>
+              <span>💧 Gewässer (<span id="cntWater">0</span>)</span>
+            </label>
+            <input type="range" id="opacityWater" min="0" max="100" value="70" class="layer-slider">
+            <button class="btn-icon-danger btn-del-layer" data-layer="water" title="Nur Gewässer-Ebene löschen">🗑️</button>
+          </div>
+
+          <div class="layer-item">
+            <label class="layer-chk">
+              <input type="checkbox" id="chkLayerBuildings" checked>
+              <span class="layer-dot" style="background: #ef4444;"></span>
+              <span>🏛️ Gebäude (<span id="cntBuildings">0</span>)</span>
+            </label>
+            <input type="range" id="opacityBuildings" min="0" max="100" value="85" class="layer-slider">
+            <button class="btn-icon-danger btn-del-layer" data-layer="building" title="Nur Gebäude-Ebene löschen">🗑️</button>
+          </div>
+
+          <div class="layer-item">
+            <label class="layer-chk">
+              <input type="checkbox" id="chkLayerVineyard" checked>
+              <span class="layer-dot" style="background: #9333ea;"></span>
+              <span>🍇 Weinberge (<span id="cntVineyard">0</span>)</span>
+            </label>
+            <input type="range" id="opacityVineyard" min="0" max="100" value="70" class="layer-slider">
+            <button class="btn-icon-danger btn-del-layer" data-layer="vineyard" title="Nur Weinberge-Ebene löschen">🗑️</button>
+          </div>
+
+          <div class="layer-item">
+            <label class="layer-chk">
+              <input type="checkbox" id="chkLayerGravel" checked>
+              <span class="layer-dot" style="background: #ea580c;"></span>
+              <span>🟠 Kies / Sand (<span id="cntGravel">0</span>)</span>
+            </label>
+            <input type="range" id="opacityGravel" min="0" max="100" value="70" class="layer-slider">
+            <button class="btn-icon-danger btn-del-layer" data-layer="gravel" title="Nur Kies-Ebene löschen">🗑️</button>
+          </div>
+
+          <div class="layer-item">
+            <label class="layer-chk">
+              <input type="checkbox" id="chkLayerGarden" checked>
+              <span class="layer-dot" style="background: #ca8a04;"></span>
+              <span>🟨 Gärten (<span id="cntGarden">0</span>)</span>
+            </label>
+            <input type="range" id="opacityGarden" min="0" max="100" value="70" class="layer-slider">
+            <button class="btn-icon-danger btn-del-layer" data-layer="garden" title="Nur Gärten-Ebene löschen">🗑️</button>
+          </div>
+
+          <button id="btnClearAllLayers" class="btn btn-secondary btn-full" style="margin-top: 6px;">
+            🗑️ Alle Vektor-Ebenen leeren
+          </button>
+        </div>
+      </div>
+
     </aside>
 
   </div>
 
-  <!-- Export Modal -->
-  <div class="modal-backdrop" id="exportModal">
-    <div class="modal-card">
-      <h3 style="color: var(--accent);">💾 GIS- & Trainingsdaten Export</h3>
-      <p style="font-size: 0.85rem; color: var(--text-muted);">Wähle das Format für den Export aller annotierten Layer:</p>
-      
-      <div style="display: flex; flex-direction: column; gap: 8px;">
-        <button class="btn btn-primary export-format-btn" data-format="geojson">
-          🌍 <strong>GeoJSON</strong> (Standard GIS-Vektorlayer)
-        </button>
-        <button class="btn export-format-btn" data-format="gpkg">
-          📦 <strong>GeoPackage (.gpkg)</strong> (QGIS / ArcGIS Multi-Layer)
-        </button>
-        <button class="btn export-format-btn" data-format="label_studio">
-          🏷️ <strong>Label Studio JSON</strong> (Direkter Import in Label Studio)
-        </button>
-        <button class="btn export-format-btn" data-format="coco">
-          🤖 <strong>COCO JSON</strong> (Für Deep-Learning Segmentation Training)
-        </button>
-      </div>
-
-      <button id="btnCloseExportModal" class="btn" style="margin-top: 6px;">Schließen</button>
+  <!-- Bottom Status Bar -->
+  <footer class="status-bar">
+    <div class="status-left">
+      <span class="status-indicator"></span>
+      <span id="statusMessage">Bereit. Wähle ein Kartenblatt aus oder stempfele Flächen.</span>
     </div>
-  </div>
+    <div class="status-right">
+      <span id="statusCoords">X: 0, Y: 0 px</span>
+      <span class="divider">|</span>
+      <span id="statusZoom">Zoom: 100%</span>
+      <span class="divider">|</span>
+      <span id="statusPolyCount">0 Flächen geladen</span>
+    </div>
+  </footer>
 
   <script src="/static/js/studio.js"></script>
 </body>

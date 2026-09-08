@@ -1,9 +1,10 @@
 /**
- * Tranchot Label Studio - Leaflet WebGIS & SAM AI Interactive Engine
- * Precise Pixel-to-LatLng Coordinates with Instant GPU SAM Preview
+ * Tranchot WebGIS Studio — Modern High-Performance Leaflet GPU Engine
+ * Dual Bright/Dark Theme, Rock-Solid 60 FPS Zoom/Pan, Interactive Stamp Land-Use Sampling,
+ * 90-Degree Orthogonal Building Extraction (Courtyards Preserved), and GIS Export.
  */
 
-class LeafletLabelStudio {
+class TranchotWebGISStudio {
   constructor() {
     this.map = null;
     this.imageOverlay = null;
@@ -12,28 +13,41 @@ class LeafletLabelStudio {
     this.imageLoaded = false;
     this.imageMeta = {};
 
-    // Tool & Mode
-    this.currentTool = "sam"; // 'sam', 'draw_poly', 'edit', 'pan'
-    this.granularity = "compact"; // 'compact', 'medium', 'large'
-    this.activeClass = {
-      id: "building",
-      name: "Gebäude",
-      color: "#ef4444",
-      type: "polygon"
+    // Tool & Class State
+    this.currentTool = "stamp"; // 'stamp', 'pan'
+    this.activeClassId = "forest";
+    this.activeClassLabel = "🌲 Wald";
+    this.activeClassColor = "#16a34a";
+    this.stampRadius = 22;
+
+    // Theme (Bright by default)
+    this.theme = localStorage.getItem("tranchot_theme") || "light";
+
+    // Vector Layers
+    this.layers = {
+      forest: L.featureGroup(),
+      meadow: L.featureGroup(),
+      water: L.featureGroup(),
+      vineyard: L.featureGroup(),
+      gravel: L.featureGroup(),
+      garden: L.featureGroup(),
+      building: L.featureGroup(),
+      stampMarkers: L.featureGroup(),
     };
 
-    // Layer Groups
-    this.annotationsLayer = null;
-    this.samCandidateLayer = null;
-    this.samMarkersLayer = null;
+    // Stamped Circles for Canvas rendering
+    this.stampsByClass = {
+      forest: [],
+      meadow: [],
+      water: [],
+      vineyard: [],
+      gravel: [],
+      garden: [],
+    };
 
-    // Prompt & State
-    this.positivePoints = []; // [[x, y], ...] in image pixel space
-    this.negativePoints = []; // [[x, y], ...] in image pixel space
-    this.currentCandidate = null;
-    this.annotations = [];
-    this.selectedAnnotationId = null;
+    this.allExtractedFeatures = [];
 
+    this.applyTheme(this.theme);
     this.initMap();
     this.setupUI();
     this.setupKeyboardShortcuts();
@@ -41,9 +55,8 @@ class LeafletLabelStudio {
   }
 
   // ==========================================
-  // Coordinate Transformations (Pixel <-> LatLng)
+  // Coordinate Conversions (Pixel <-> LatLng)
   // ==========================================
-
   pixelToLatLng(x, y) {
     return [this.imageHeight - y, x];
   }
@@ -51,703 +64,848 @@ class LeafletLabelStudio {
   latLngToPixel(lat, lng) {
     return {
       x: Math.round(lng),
-      y: Math.round(this.imageHeight - lat)
+      y: Math.round(this.imageHeight - lat),
     };
   }
 
   // ==========================================
-  // Leaflet Map Initialization
+  // Leaflet Map Initialization (60 FPS GPU)
   // ==========================================
-
   initMap() {
     this.map = L.map("map", {
       crs: L.CRS.Simple,
-      minZoom: -4,
-      maxZoom: 6,
-      zoomSnap: 0.25,
-      zoomDelta: 0.5,
+      minZoom: -5,
+      maxZoom: 5,
+      zoomSnap: 0.1,
+      zoomDelta: 0.25,
       wheelPxPerZoomLevel: 60,
       zoomControl: true,
       attributionControl: false,
+      preferCanvas: true,
     });
 
-    this.annotationsLayer = L.featureGroup().addTo(this.map);
-    this.samCandidateLayer = L.featureGroup().addTo(this.map);
-    this.samMarkersLayer = L.featureGroup().addTo(this.map);
+    // Add all layer groups to map
+    for (const group of Object.values(this.layers)) {
+      group.addTo(this.map);
+    }
 
-    // Track Cursor
+    // Live cursor stamp ring
+    this.cursorRing = L.circle([0, 0], {
+      radius: this.stampRadius,
+      color: this.activeClassColor,
+      weight: 1.5,
+      dashArray: "4, 4",
+      fillColor: this.activeClassColor,
+      fillOpacity: 0.25,
+      interactive: false,
+    });
+
+    // Cursor tracking
     this.map.on("mousemove", (e) => {
       if (!this.imageLoaded) return;
       const px = this.latLngToPixel(e.latlng.lat, e.latlng.lng);
       document.getElementById("statusCoords").innerText = `X: ${px.x}, Y: ${px.y} px`;
+
+      if (this.currentTool === "stamp" && px.x >= 0 && px.y >= 0 && px.x <= this.imageWidth && px.y <= this.imageHeight) {
+        this.cursorRing.setLatLng(e.latlng);
+        this.cursorRing.setRadius(this.stampRadius);
+        this.cursorRing.setStyle({ color: this.activeClassColor, fillColor: this.activeClassColor });
+        if (!this.map.hasLayer(this.cursorRing)) {
+          this.cursorRing.addTo(this.map);
+        }
+      } else {
+        if (this.map.hasLayer(this.cursorRing)) {
+          this.map.removeLayer(this.cursorRing);
+        }
+      }
     });
+
+    this.map.on("mouseout", () => {
+      if (this.map.hasLayer(this.cursorRing)) {
+        this.map.removeLayer(this.cursorRing);
+      }
+    });
+
+    // Wheel radius adjustment (Ctrl/Shift+Wheel)
+    const mapContainer = document.getElementById("map");
+    if (mapContainer) {
+      mapContainer.addEventListener("wheel", (e) => {
+        if (e.ctrlKey || e.shiftKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          const delta = e.deltaY < 0 ? 1 : -1;
+          this.stampRadius = Math.max(2, Math.min(120, this.stampRadius + delta * 2));
+          const slider = document.getElementById("sliderStampRadius");
+          if (slider) slider.value = this.stampRadius;
+          const lbl = document.getElementById("lblStampRadiusVal");
+          if (lbl) lbl.innerText = `${this.stampRadius} px (Mausrad: 2–120 px)`;
+          if (this.map.hasLayer(this.cursorRing)) {
+            this.cursorRing.setRadius(this.stampRadius);
+          }
+        }
+      }, { passive: false });
+    }
 
     this.map.on("zoomend", () => {
       const zoom = Math.round(Math.pow(2, this.map.getZoom()) * 100);
       document.getElementById("statusZoom").innerText = `Zoom: ${zoom}%`;
     });
 
-    // Left Click: Positive Point / Tool action
-    this.map.on("click", (e) => {
-      if (this.currentTool !== "sam" || !this.imageLoaded) return;
-
-      const px = this.latLngToPixel(e.latlng.lat, e.latlng.lng);
-      if (px.x < 0 || px.y < 0 || px.x > this.imageWidth || px.y > this.imageHeight) return;
-
-      if (e.originalEvent.shiftKey || e.originalEvent.button === 2) {
-        // Negative Point
-        this.negativePoints.push([px.x, px.y]);
-        this.addMarker(px.x, px.y, "#ef4444", "-");
-      } else {
-        // Positive Point
-        this.positivePoints.push([px.x, px.y]);
-        this.addMarker(px.x, px.y, "#22c55e", "+");
-      }
-
-      this.requestSAMPrediction();
-    });
-
-    // Right Click: Negative Point
-    this.map.on("contextmenu", (e) => {
-      if (this.currentTool !== "sam" || !this.imageLoaded) return;
-      const px = this.latLngToPixel(e.latlng.lat, e.latlng.lng);
-      if (px.x >= 0 && px.y >= 0 && px.x <= this.imageWidth && px.y <= this.imageHeight) {
-        this.negativePoints.push([px.x, px.y]);
-        this.addMarker(px.x, px.y, "#ef4444", "-");
-        this.requestSAMPrediction();
-      }
-    });
-
-    // Geoman setup
-    if (this.map.pm) {
-      this.map.pm.setLang("de");
-      this.map.on("pm:create", (e) => {
-        const shape = e.layer;
-        const latlngs = shape.getLatLngs()[0];
-        const points = latlngs.map((ll) => {
-          const px = this.latLngToPixel(ll.lat, ll.lng);
-          return [px.x, px.y];
-        });
-
-        if (this.currentTool === "sam_box") {
-          const x1 = Math.min(...points.map((p) => p[0]));
-          const y1 = Math.min(...points.map((p) => p[1]));
-          const x2 = Math.max(...points.map((p) => p[0]));
-          const y2 = Math.max(...points.map((p) => p[1]));
-          this.map.removeLayer(shape);
-          this.requestSAMBoxPrediction([x1, y1, x2, y2]);
-          return;
-        }
-
-        const newAnn = {
-          id: Date.now(),
-          label: this.activeClass.name,
-          color: this.activeClass.color,
-          type: "polygon",
-          points: points,
-          leafletLayer: shape,
-          area: this.calcPolygonArea(points),
-          properties: { manual_drawn: true }
-        };
-
-        shape.setStyle({
-          color: this.activeClass.color,
-          fillColor: this.activeClass.color,
-          fillOpacity: 0.45,
-          weight: 2,
-        });
-
-        shape.on("click", () => this.selectAnnotation(newAnn.id));
-        this.annotations.push(newAnn);
-        this.updateObjectList();
-      });
-    }
-  }
-
-  addMarker(px_x, px_y, color, symbol) {
-    const latlng = this.pixelToLatLng(px_x, px_y);
-    L.circleMarker(latlng, {
-      radius: 7,
-      fillColor: color,
-      color: "#ffffff",
-      weight: 2.5,
-      opacity: 1,
-      fillOpacity: 0.95,
-    }).addTo(this.samMarkersLayer);
+    // Canvas click dispatcher
+    this.map.on("click", (e) => this.handleMapClick(e));
   }
 
   // ==========================================
-  // SAM Inferenz Request & Rendering
+  // Theme Toggle (Bright / Dark)
   // ==========================================
-
-  async requestSAMPrediction() {
-    if (this.positivePoints.length === 0 && this.negativePoints.length === 0) {
-      this.clearPrompts();
-      return;
-    }
-
-    try {
-      document.getElementById("statusMsg").innerText = "✨ SAM berechnet Segmentierung auf GPU...";
-      const resp = await fetch("/api/sam_predict", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          positive_points: this.positivePoints,
-          negative_points: this.negativePoints,
-          granularity: this.granularity,
-          simplification: 0.015
-        })
-      });
-
-      const data = await resp.json();
-      this.samCandidateLayer.clearLayers();
-
-      if (data.polygons && data.polygons.length > 0) {
-        this.currentCandidate = data;
-
-        data.polygons.forEach((poly, idx) => {
-          // Convert all [x, y] polygon vertices to correct Leaflet [lat, lng]
-          const latlngs = poly.points.map((pt) => this.pixelToLatLng(pt[0], pt[1]));
-
-          const candidatePoly = L.polygon(latlngs, {
-            color: "#38bdf8",
-            fillColor: "#0284c7",
-            fillOpacity: 0.55,
-            weight: 3.5,
-            dashArray: idx === 0 ? "6, 6" : "2, 4",
-          }).addTo(this.samCandidateLayer);
-
-          if (idx === 0) {
-            this.updateBanner(true, data.iou_score, poly.area);
-          }
-        });
-
-        document.getElementById("statusMsg").innerText = `✅ SAM Segmentierung (IoU: ${(data.iou_score * 100).toFixed(0)}%). Drücke Enter zum Speichern.`;
-      } else {
-        document.getElementById("statusMsg").innerText = "⚠️ SAM hat an diesem Punkt kein klares Objekt gefunden. Klicke erneut.";
-      }
-    } catch (err) {
-      console.error("SAM Prediction Error:", err);
-      document.getElementById("statusMsg").innerText = "SAM Fehler beim Verbinden zum Server.";
+  applyTheme(theme) {
+    this.theme = theme;
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("tranchot_theme", theme);
+    
+    const btn = document.getElementById("btnThemeToggle");
+    if (btn) {
+      btn.innerText = theme === "light" ? "☀️ Hell" : "🌙 Dunkel";
     }
   }
 
-  async requestSAMBoxPrediction(box) {
-    try {
-      document.getElementById("statusMsg").innerText = "✨ SAM berechnet Bounding-Box...";
-      const resp = await fetch("/api/sam_predict", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bounding_box: box,
-          granularity: this.granularity,
-          simplification: 0.015
-        })
-      });
+  toggleTheme() {
+    const nextTheme = this.theme === "light" ? "dark" : "light";
+    this.applyTheme(nextTheme);
+  }
 
-      const data = await resp.json();
-      this.samCandidateLayer.clearLayers();
+  // ==========================================
+  // Map Clicks & Tool Handlers
+  // ==========================================
+  handleMapClick(e) {
+    if (!this.imageLoaded) return;
+    const px = this.latLngToPixel(e.latlng.lat, e.latlng.lng);
+    if (px.x < 0 || px.y < 0 || px.x > this.imageWidth || px.y > this.imageHeight) return;
 
-      if (data.polygons && data.polygons.length > 0) {
-        this.currentCandidate = data;
-        const poly = data.polygons[0];
-        const latlngs = poly.points.map((pt) => this.pixelToLatLng(pt[0], pt[1]));
-
-        L.polygon(latlngs, {
-          color: "#38bdf8",
-          fillColor: "#0284c7",
-          fillOpacity: 0.55,
-          weight: 3.5,
-          dashArray: "6, 6"
-        }).addTo(this.samCandidateLayer);
-
-        this.updateBanner(true, data.iou_score, poly.area);
-        document.getElementById("statusMsg").innerText = `✅ Gebäude in Box erkannt (${poly.area} px²). Drücke Enter zum Speichern.`;
-      }
-
-      // Keep draw rectangle active for next box
-      if (this.currentTool === "sam_box" && this.map.pm) {
-        this.map.pm.enableDraw("Rectangle", {
-          snappingOption: false,
-          templineStyle: { color: "#38bdf8", dashArray: [4, 4] },
-          hintlineStyle: { color: "#38bdf8", dashArray: [4, 4] },
-        });
-      }
-    } catch (err) {
-      console.error("SAM Box Error:", err);
+    if (this.currentTool === "stamp") {
+      this.executeStampSample(px.x, px.y);
     }
   }
 
-  commitSAMCandidate() {
-    if (!this.currentCandidate || !this.currentCandidate.polygons || this.currentCandidate.polygons.length === 0) {
-      return;
-    }
+  // ==========================================
+  // Stempel (Color & Texture Sampling)
+  // ==========================================
+  async executeStampSample(cx, cy) {
+    this.showStatus(`🖌️ Sampele Nuance für ${this.activeClassLabel} bei (${cx}, ${cy})...`);
 
-    const poly = this.currentCandidate.polygons[0];
-    const latlngs = poly.points.map((pt) => this.pixelToLatLng(pt[0], pt[1]));
+    try {
+      const res = await fetch("/api/sample_stamp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          class_id: this.activeClassId,
+          cx: cx,
+          cy: cy,
+          radius: this.stampRadius,
+        }),
+      });
 
-    const layer = L.polygon(latlngs, {
-      color: this.activeClass.color,
-      fillColor: this.activeClass.color,
-      fillOpacity: 0.45,
-      weight: 2.5,
-    }).addTo(this.annotationsLayer);
-
-    const newAnn = {
-      id: Date.now(),
-      label: this.activeClass.name,
-      color: this.activeClass.color,
-      type: "polygon",
-      points: poly.points,
-      area: poly.area,
-      leafletLayer: layer,
-      properties: {
-        iou_score: this.currentCandidate.iou_score,
-        class_id: this.activeClass.id,
+      if (!res.ok) {
+        const err = await res.json();
+        this.showStatus(`⚠️ ${err.detail || "Stempelfehler"}`, true);
+        return;
       }
+
+      const data = await res.json();
+      const stamp = data.stamp;
+
+      this.stampsByClass[this.activeClassId].push(stamp);
+      this.renderStampOnMap(stamp, this.activeClassId, this.activeClassLabel);
+      this.refreshStampChipsUI();
+
+      this.showStatus(
+        `✅ Stempel #${stamp.stamp_id} für '${this.activeClassLabel}' erfasst! (${stamp.distilled_pixels}/${stamp.raw_pixels} px reines Pigment)`
+      );
+    } catch (e) {
+      this.showStatus(`Netzwerkfehler: ${e.message}`, true);
+    }
+  }
+
+  renderStampOnMap(stamp, classId, label) {
+    const center = this.pixelToLatLng(stamp.cx, stamp.cy);
+
+    const circle = L.circle(center, {
+      radius: stamp.radius,
+      color: stamp.hex_color,
+      weight: 2,
+      fillColor: stamp.hex_color,
+      fillOpacity: 0.4,
+    });
+
+    circle.bindTooltip(`⭘ ${label} #${stamp.stamp_id}`, {
+      permanent: true,
+      direction: "top",
+      className: "leaflet-stamp-badge",
+      offset: [0, -stamp.radius],
+    });
+
+    circle.addTo(this.layers.stampMarkers);
+  }
+
+  renderAllStamps() {
+    this.layers.stampMarkers.clearLayers();
+    const classLabels = {
+      forest: "🌲 Wald",
+      meadow: "🌿 Wiese",
+      water: "💧 Gewässer",
+      vineyard: "🍇 Weinberge",
+      gravel: "🟠 Kies",
+      garden: "🟨 Gärten",
     };
 
-    layer.on("click", () => this.selectAnnotation(newAnn.id));
-
-    this.annotations.push(newAnn);
-    this.clearPrompts();
-    this.updateObjectList();
-    document.getElementById("statusMsg").innerText = `💾 Objekt gespeichert: #${this.annotations.length} ${newAnn.label}`;
+    for (const [cid, stamps] of Object.entries(this.stampsByClass)) {
+      const lbl = classLabels[cid] || cid;
+      for (const s of stamps) {
+        this.renderStampOnMap(s, cid, lbl);
+      }
+    }
   }
 
-  clearPrompts() {
-    this.positivePoints = [];
-    this.negativePoints = [];
-    this.currentCandidate = null;
-    this.samCandidateLayer.clearLayers();
-    this.samMarkersLayer.clearLayers();
-    this.updateBanner(false);
+  refreshStampChipsUI() {
+    const list = document.getElementById("stampChipsList");
+    list.innerHTML = "";
+
+    const stamps = this.stampsByClass[this.activeClassId] || [];
+    document.getElementById("activeClassStatus").innerText = `${stamps.length} Stempel aktiv`;
+
+    if (stamps.length === 0) {
+      list.innerHTML = `<span class="empty-chips-msg">Noch keine Stempel. Klicke 3–10 Stellen auf der Karte an.</span>`;
+      return;
+    }
+
+    stamps.forEach((s, idx) => {
+      const chip = document.createElement("div");
+      chip.className = "stamp-chip";
+      chip.innerHTML = `
+        <span class="stamp-chip-dot" style="background: ${s.hex_color};"></span>
+        <span>#${s.stamp_id}</span>
+        <span class="stamp-chip-del" title="Diesen Stempel löschen">✕</span>
+      `;
+      chip.querySelector(".stamp-chip-del").onclick = (e) => {
+        e.stopPropagation();
+        this.removeStamp(this.activeClassId, idx);
+      };
+      list.appendChild(chip);
+    });
   }
 
-  updateBanner(active, iou = 0, area = 0) {
-    const banner = document.getElementById("samActionBanner");
-    if (active) {
-      banner.classList.add("active");
-      document.getElementById("bannerIou").innerText = `IoU: ${(iou * 100).toFixed(0)}%`;
-      document.getElementById("bannerArea").innerText = `Fläche: ${Math.round(area)} px²`;
-    } else {
-      banner.classList.remove("active");
+  async removeStamp(classId, index) {
+    try {
+      await fetch("/api/remove_stamp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ class_id: classId, stamp_index: index }),
+      });
+      this.stampsByClass[classId].splice(index, 1);
+      this.renderAllStamps();
+      this.refreshStampChipsUI();
+      this.showStatus(`🗑️ Stempel entfernt.`);
+    } catch (e) {
+      this.showStatus(`Fehler beim Löschen: ${e.message}`, true);
+    }
+  }
+
+  async clearClassStamps(classId) {
+    try {
+      await fetch("/api/clear_stamps", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ class_id: classId }),
+      });
+      this.stampsByClass[classId] = [];
+      this.renderAllStamps();
+      this.refreshStampChipsUI();
+      this.showStatus(`🗑️ Alle Stempel für '${this.activeClassLabel}' geleert.`);
+    } catch (e) {
+      this.showStatus(`Fehler: ${e.message}`, true);
     }
   }
 
   // ==========================================
-  // Object List & Layer Management
+  // Building Extraction (`🏛️ Gebäude extrahieren`)
   // ==========================================
+  async runBuildingExtraction() {
+    this.showStatus("🏛️ Extrahiere 90°-orthogonale Gebäude & Hofanlagen (Courtyards erhalten)...");
 
-  selectAnnotation(id) {
-    this.selectedAnnotationId = this.selectedAnnotationId === id ? null : id;
-    this.annotations.forEach((ann) => {
-      if (ann.leafletLayer) {
-        if (ann.id === this.selectedAnnotationId) {
-          ann.leafletLayer.setStyle({ color: "#ffffff", weight: 4, fillOpacity: 0.7 });
-          if (ann.leafletLayer.getBounds) {
-            this.map.panTo(ann.leafletLayer.getBounds().getCenter());
-          }
-        } else {
-          ann.leafletLayer.setStyle({ color: ann.color, weight: 2.5, fillOpacity: 0.45 });
-        }
+    const minArea = parseInt(document.getElementById("sliderMinBldgArea")?.value || 35);
+    const ortho = document.getElementById("chkOrthoRegularization") ? document.getElementById("chkOrthoRegularization").checked : true;
+
+    try {
+      const res = await fetch("/api/extract_buildings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          min_area_px: minArea,
+          max_area_px: 10000.0,
+          orthogonal_regularization: ortho,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Fehler bei Gebäudeextraktion");
+
+      const geojson = await res.json();
+      this.layers.building.clearLayers();
+
+      const bldgFeatures = geojson.features || [];
+      for (const feat of bldgFeatures) {
+        const leafletLayer = L.geoJSON(feat, {
+          coordsToLatLng: (coords) => this.pixelToLatLng(coords[0], coords[1]),
+          renderer: L.svg({ padding: 0.5 }),
+          style: {
+            color: "#ef4444",
+            weight: 1.8,
+            opacity: 0.95,
+            fillColor: "#ef4444",
+            fillOpacity: 0.85,
+            fillRule: "evenodd",
+          },
+        });
+
+        leafletLayer.bindTooltip(
+          `<strong>🏛️ Gebäude</strong><br>Fläche: ${feat.properties.area_px} px²`,
+          { sticky: true }
+        );
+
+        leafletLayer.addTo(this.layers.building);
       }
-    });
-    this.updateObjectList();
-  }
 
-  updateObjectList() {
-    const listEl = document.getElementById("objectList");
-    const countEl = document.getElementById("objCount");
-    listEl.innerHTML = "";
-    countEl.innerText = this.annotations.length;
+      // Add to exported list
+      this.allExtractedFeatures = this.allExtractedFeatures.filter(f => f.properties.class_id !== "building").concat(bldgFeatures);
 
-    this.annotations.forEach((ann, idx) => {
-      const item = document.createElement("div");
-      item.className = `object-item ${this.selectedAnnotationId === ann.id ? "selected" : ""}`;
-      item.innerHTML = `
-        <div class="obj-left">
-          <div class="obj-color-box" style="background: ${ann.color};"></div>
-          <div>
-            <div class="obj-name">#${idx + 1} ${ann.label}</div>
-            <div class="obj-meta">${ann.area ? Math.round(ann.area) + " px²" : ann.text || "Objekt"}</div>
-          </div>
-        </div>
-        <div class="obj-actions">
-          <button class="icon-btn delete-btn" title="Löschen">🗑️</button>
-        </div>
-      `;
+      if (document.getElementById("cntBuildings")) {
+        document.getElementById("cntBuildings").innerText = bldgFeatures.length;
+      }
 
-      item.addEventListener("click", (e) => {
-        if (!e.target.classList.contains("delete-btn")) {
-          this.selectAnnotation(ann.id);
-        }
-      });
-
-      item.querySelector(".delete-btn").addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (ann.leafletLayer) {
-          this.annotationsLayer.removeLayer(ann.leafletLayer);
-        }
-        this.annotations = this.annotations.filter((a) => a.id !== ann.id);
-        this.updateObjectList();
-      });
-
-      listEl.appendChild(item);
-    });
+      this.showStatus(`✅ ${bldgFeatures.length} 90°-orthogonale Gebäude extrahiert!`);
+    } catch (e) {
+      this.showStatus(`Gebäudefehler: ${e.message}`, true);
+    }
   }
 
   // ==========================================
-  // Image Loading & Presets
+  // Land-Use Extraction (`⚡ Flächen berechnen`)
   // ==========================================
+  async runLandUseExtraction() {
+    this.showStatus("⚡ Berechne gelernten Flächenbestand über alle Klassen (kompetitiv, 0 Überlappung)...");
 
+    try {
+      const res = await fetch("/api/extract_landuse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      if (!res.ok) throw new Error(`Serverfehler (${res.status})`);
+
+      const geojson = await res.json();
+
+      // Clear previous land-use vector layers (keep buildings)
+      this.layers.forest.clearLayers();
+      this.layers.meadow.clearLayers();
+      this.layers.water.clearLayers();
+      this.layers.vineyard.clearLayers();
+      this.layers.gravel.clearLayers();
+      this.layers.garden.clearLayers();
+
+      const landuseFeatures = geojson.features || [];
+      this.allExtractedFeatures = this.allExtractedFeatures.filter(f => f.properties.class_id === "building").concat(landuseFeatures);
+
+      let counts = { forest: 0, meadow: 0, water: 0, vineyard: 0, gravel: 0, garden: 0 };
+
+      for (const feat of landuseFeatures) {
+        const cid = feat.properties.class_id || "forest";
+        counts[cid] = (counts[cid] || 0) + 1;
+
+        const targetGroup = this.layers[cid] || this.layers.forest;
+        const color = feat.properties.color || "#16a34a";
+
+        const leafletLayer = L.geoJSON(feat, {
+          coordsToLatLng: (coords) => this.pixelToLatLng(coords[0], coords[1]),
+          style: {
+            color: color,
+            weight: 2,
+            opacity: 0.9,
+            fillColor: color,
+            fillOpacity: 0.65,
+          },
+        });
+
+        leafletLayer.bindTooltip(
+          `<strong>${feat.properties.label}</strong><br>Fläche: ${feat.properties.area_px} px²`,
+          { sticky: true }
+        );
+
+        leafletLayer.addTo(targetGroup);
+      }
+
+      if (document.getElementById("cntForest")) document.getElementById("cntForest").innerText = counts.forest;
+      if (document.getElementById("cntMeadow")) document.getElementById("cntMeadow").innerText = counts.meadow;
+      if (document.getElementById("cntWater")) document.getElementById("cntWater").innerText = counts.water;
+      if (document.getElementById("cntVineyard")) document.getElementById("cntVineyard").innerText = counts.vineyard;
+      if (document.getElementById("cntGravel")) document.getElementById("cntGravel").innerText = counts.gravel;
+      if (document.getElementById("cntGarden")) document.getElementById("cntGarden").innerText = counts.garden;
+
+      document.getElementById("statusPolyCount").innerText = `${this.allExtractedFeatures.length} Flächen geladen`;
+      this.showStatus(
+        `✅ Fertig in ${geojson.elapsed_seconds}s: ${geojson.total_polygons} Flächen über alle Klassen berechnet!`
+      );
+    } catch (e) {
+      this.showStatus(`Extraktionsfehler: ${e.message}`, true);
+    }
+  }
+
+  // ==========================================
+  // Image Enhancement & Normalization
+  // ==========================================
+  async applyEnhancement(params) {
+    this.showStatus("✨ Wende Weißabgleich & Bildfilter an...");
+
+    try {
+      const res = await fetch("/api/enhance_map", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params),
+      });
+
+      if (!res.ok) throw new Error("Fehler beim Bildfilter");
+
+      const data = await res.json();
+      this.updateImageOverlay(data.image_data);
+      this.showStatus("✅ Bildfilter erfolgreich angewendet!");
+    } catch (e) {
+      this.showStatus(`Fehler: ${e.message}`, true);
+    }
+  }
+
+  updateImageOverlay(dataUrl) {
+    const bounds = [
+      [0, 0],
+      [this.imageHeight, this.imageWidth],
+    ];
+
+    if (this.imageOverlay) {
+      this.map.removeLayer(this.imageOverlay);
+      this.imageOverlay = null;
+    }
+
+    this.imageOverlay = L.imageOverlay(dataUrl, bounds, {
+      opacity: 1.0,
+      interactive: false,
+    }).addTo(this.map);
+
+    this.map.fitBounds(bounds, { padding: [10, 10] });
+    this.map.setMaxBounds([
+      [-this.imageHeight * 0.2, -this.imageWidth * 0.2],
+      [this.imageHeight * 1.2, this.imageWidth * 1.2],
+    ]);
+  }
+
+  // ==========================================
+  // Preset & File Loading
+  // ==========================================
   async loadPresets() {
     try {
-      const resp = await fetch("/api/presets");
-      const data = await resp.json();
+      const res = await fetch("/api/presets");
+      const data = await res.json();
       const select = document.getElementById("presetSelect");
       select.innerHTML = "";
-      data.presets.forEach((p) => {
+
+      let defaultPath = null;
+      for (const p of data.presets) {
         const opt = document.createElement("option");
         opt.value = p.path;
         opt.innerText = p.name;
         select.appendChild(opt);
-      });
-
-      if (data.presets.length > 0) {
-        this.loadImage(data.presets[0].path);
+        if (!defaultPath || p.name.includes("Nickenich")) {
+          defaultPath = p.path;
+        }
       }
-    } catch (err) {
-      console.error("Failed to load presets:", err);
+
+      if (defaultPath) {
+        select.value = defaultPath;
+        this.loadImage(defaultPath);
+      }
+    } catch (e) {
+      console.error("Presets loading error:", e);
     }
   }
 
   async loadImage(path) {
+    this.showStatus(`Lade Kartenblatt: ${path}...`);
     try {
-      document.getElementById("statusMsg").innerText = "Lade Kartenblatt...";
-      const formData = new FormData();
-      formData.append("preset_path", path);
+      const fd = new FormData();
+      fd.append("preset_path", path);
 
-      const resp = await fetch("/api/load_image", {
+      const res = await fetch("/api/load_image", {
         method: "POST",
-        body: formData
+        body: fd,
       });
 
-      const data = await resp.json();
+      if (!res.ok) throw new Error("Fehler beim Laden des Bildes");
 
+      const data = await res.json();
       this.imageWidth = data.width;
       this.imageHeight = data.height;
-      this.imageMeta = data.metadata;
       this.imageLoaded = true;
+      this.imageMeta = data.metadata || {};
 
-      // Clear existing layers
-      if (this.imageOverlay) {
-        this.map.removeLayer(this.imageOverlay);
+      // Reset all vector layers, stamps, and counters
+      for (const group of Object.values(this.layers)) {
+        group.clearLayers();
       }
-      this.annotationsLayer.clearLayers();
-      this.samCandidateLayer.clearLayers();
-      this.samMarkersLayer.clearLayers();
-      this.annotations = [];
-      this.clearPrompts();
+      for (const k of Object.keys(this.stampsByClass)) {
+        this.stampsByClass[k] = [];
+      }
+      this.allExtractedFeatures = [];
+      this.refreshStampChipsUI();
 
-      // In Leaflet CRS.Simple bounds: [[0, 0], [height, width]]
-      const bounds = [[0, 0], [this.imageHeight, this.imageWidth]];
-      this.imageOverlay = L.imageOverlay(data.image_data, bounds).addTo(this.map);
+      ["cntForest", "cntMeadow", "cntWater", "cntBuildings", "cntVineyard", "cntGravel", "cntGarden"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerText = "0";
+      });
+      const polyCnt = document.getElementById("statusPolyCount");
+      if (polyCnt) polyCnt.innerText = "0 Flächen geladen";
 
-      this.map.setMaxBounds([[-1000, -1000], [this.imageHeight + 1000, this.imageWidth + 1000]]);
-      this.map.fitBounds(bounds);
+      this.updateImageOverlay(data.image_data);
 
-      document.getElementById("statusMsg").innerText = `Geladen: ${this.imageWidth} × ${this.imageHeight} px (${data.metadata.crs || "EPSG:3857"})`;
-      this.updateObjectList();
-    } catch (err) {
-      document.getElementById("statusMsg").innerText = "Fehler beim Laden des Bildes.";
+      const bounds = [
+        [0, 0],
+        [this.imageHeight, this.imageWidth],
+      ];
+      this.map.fitBounds(bounds, { padding: [10, 10] });
+
+      this.showStatus(`🗺️ Geladen: ${data.filename} (${this.imageWidth}×${this.imageHeight} px).`);
+    } catch (e) {
+      this.showStatus(`Fehler beim Laden: ${e.message}`, true);
     }
   }
 
   // ==========================================
-  // AI Assist / Auto-ML Functions
+  // Exports
   // ==========================================
+  async exportData(format) {
+    this.showStatus(`💾 Bereite ${format.toUpperCase()}-Export vor...`);
 
-  async runAutoSAM() {
-    document.getElementById("statusMsg").innerText = "🤖 SAM Auto-Assistent analysiert Baukörper...";
+    const annotations = [];
+    let idCounter = 1;
+
+    for (const feat of this.allExtractedFeatures) {
+      const coords = feat.geometry.coordinates;
+      annotations.push({
+        id: idCounter++,
+        label: feat.properties.label || "Landnutzung",
+        color: feat.properties.color || "#16a34a",
+        type: "polygon",
+        points: (coords && coords.length === 1) ? coords[0] : coords,
+        properties: feat.properties,
+      });
+    }
+
     try {
-      const resp = await fetch("/api/sam_auto", {
+      const res = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rgb_diff_thresh: 35, min_seed_area: 15 })
+        body: JSON.stringify({ annotations: annotations, format: format }),
       });
-      const data = await resp.json();
-      if (data.polygons) {
-        data.polygons.forEach((poly) => {
-          const latlngs = poly.points.map((pt) => this.pixelToLatLng(pt[0], pt[1]));
-          const layer = L.polygon(latlngs, {
-            color: "#ef4444",
-            fillColor: "#ef4444",
-            fillOpacity: 0.45,
-            weight: 2,
-          }).addTo(this.annotationsLayer);
 
-          const ann = {
-            id: Date.now() + Math.random(),
-            label: "Gebäude",
-            color: "#ef4444",
-            type: "polygon",
-            points: poly.points,
-            area: poly.area,
-            leafletLayer: layer,
-            properties: { auto_detected: true }
-          };
+      if (!res.ok) throw new Error("Export fehlgeschlagen");
 
-          layer.on("click", () => this.selectAnnotation(ann.id));
-          this.annotations.push(ann);
-        });
-
-        this.updateObjectList();
-        document.getElementById("statusMsg").innerText = `✅ ${data.building_count} Gebäude automatisch mit SAM extrahiert!`;
-      }
-    } catch (err) {
-      document.getElementById("statusMsg").innerText = "Fehler bei SAM Auto-Extraktion.";
-    }
-  }
-
-  async runOCR() {
-    document.getElementById("statusMsg").innerText = "🔍 OCR liest historische Toponyme...";
-    try {
-      const resp = await fetch("/api/ocr_predict", { method: "POST" });
-      const data = await resp.json();
-      if (data.toponyms) {
-        data.toponyms.forEach((t) => {
-          const latlngs = t.bbox.map((pt) => this.pixelToLatLng(pt[0], pt[1]));
-          const layer = L.polygon(latlngs, {
-            color: "#f59e0b",
-            fillColor: "#f59e0b",
-            fillOpacity: 0.35,
-            weight: 2,
-          }).addTo(this.annotationsLayer);
-
-          layer.bindTooltip(t.text, { permanent: true, direction: "top", className: "ocr-tooltip" });
-
-          const ann = {
-            id: Date.now() + Math.random(),
-            label: "Toponym",
-            text: t.text,
-            color: "#f59e0b",
-            type: "bbox",
-            points: t.bbox,
-            leafletLayer: layer,
-            properties: { confidence: t.confidence, category: t.category }
-          };
-
-          layer.on("click", () => this.selectAnnotation(ann.id));
-          this.annotations.push(ann);
-        });
-
-        this.updateObjectList();
-        document.getElementById("statusMsg").innerText = `✅ ${data.toponyms.length} Toponyme erkannt!`;
-      }
-    } catch (err) {
-      document.getElementById("statusMsg").innerText = "Fehler bei OCR.";
-    }
-  }
-
-  calcPolygonArea(points) {
-    let area = 0;
-    const n = points.length;
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
-      area += points[i][0] * points[j][1];
-      area -= points[j][0] * points[i][1];
-    }
-    return Math.abs(area) / 2.0;
-  }
-
-  // ==========================================
-  // UI & Tool Handlers
-  // ==========================================
-
-  setupUI() {
-    document.getElementById("presetSelect").addEventListener("change", (e) => {
-      this.loadImage(e.target.value);
-    });
-
-    document.getElementById("btnFitView").addEventListener("click", () => {
-      if (this.imageLoaded) {
-        this.map.fitBounds([[0, 0], [this.imageHeight, this.imageWidth]]);
-      }
-    });
-
-    const toolSAM = document.getElementById("toolSAM");
-    const toolSAMBox = document.getElementById("toolSAMBox");
-    const toolPoly = document.getElementById("toolPoly");
-    const toolEdit = document.getElementById("toolEdit");
-    const toolPan = document.getElementById("toolPan");
-
-    const clearActiveTools = () => {
-      [toolSAM, toolSAMBox, toolPoly, toolEdit, toolPan].forEach((b) => {
-        if (b) b.classList.remove("active");
-      });
-      if (this.map.pm) {
-        this.map.pm.disableDraw();
-        this.map.pm.disableGlobalEditMode();
-      }
-    };
-
-    toolSAM.addEventListener("click", () => {
-      clearActiveTools();
-      toolSAM.classList.add("active");
-      this.currentTool = "sam";
-      this.map.dragging.enable();
-    });
-
-    if (toolSAMBox) {
-      toolSAMBox.addEventListener("click", () => {
-        clearActiveTools();
-        toolSAMBox.classList.add("active");
-        this.currentTool = "sam_box";
-        if (this.map.pm) {
-          this.map.pm.enableDraw("Rectangle", {
-            snappingOption: false,
-            templineStyle: { color: "#38bdf8", dashArray: [4, 4] },
-            hintlineStyle: { color: "#38bdf8", dashArray: [4, 4] },
-          });
-        }
-      });
-    }
-
-    toolPoly.addEventListener("click", () => {
-      clearActiveTools();
-      toolPoly.classList.add("active");
-      this.currentTool = "draw_poly";
-      if (this.map.pm) {
-        this.map.pm.enableDraw("Polygon", {
-          snappingOption: true,
-          templineStyle: { color: this.activeClass.color },
-          hintlineStyle: { color: this.activeClass.color, dashArray: [5, 5] },
-        });
-      }
-    });
-
-    toolEdit.addEventListener("click", () => {
-      clearActiveTools();
-      toolEdit.classList.add("active");
-      this.currentTool = "edit";
-      if (this.map.pm) {
-        this.map.pm.enableGlobalEditMode();
-      }
-    });
-
-    toolPan.addEventListener("click", () => {
-      clearActiveTools();
-      toolPan.classList.add("active");
-      this.currentTool = "pan";
-      this.map.dragging.enable();
-    });
-
-    document.querySelectorAll(".class-chip").forEach((chip) => {
-      chip.addEventListener("click", (e) => {
-        document.querySelectorAll(".class-chip").forEach((c) => c.classList.remove("active"));
-        const target = e.currentTarget;
-        target.classList.add("active");
-        this.activeClass = {
-          id: target.dataset.id,
-          name: target.dataset.name,
-          color: target.dataset.color,
-          type: "polygon"
-        };
-      });
-    });
-
-    // Granularity Toggle buttons
-    document.querySelectorAll(".gran-btn").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        document.querySelectorAll(".gran-btn").forEach((b) => b.classList.remove("active"));
-        const target = e.currentTarget;
-        target.classList.add("active");
-        this.granularity = target.dataset.gran;
-        if (this.positivePoints.length > 0) {
-          this.requestSAMPrediction();
-        }
-      });
-    });
-
-    document.getElementById("btnCommitSAM").addEventListener("click", () => this.commitSAMCandidate());
-    document.getElementById("btnCancelSAM").addEventListener("click", () => this.clearPrompts());
-    document.getElementById("btnAutoSAM").addEventListener("click", () => this.runAutoSAM());
-    document.getElementById("btnRunOCR").addEventListener("click", () => this.runOCR());
-
-    document.getElementById("btnExport").addEventListener("click", () => {
-      document.getElementById("exportModal").classList.add("active");
-    });
-    document.getElementById("btnCloseExportModal").addEventListener("click", () => {
-      document.getElementById("exportModal").classList.remove("active");
-    });
-
-    document.querySelectorAll(".export-format-btn").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
-        const format = e.currentTarget.dataset.format;
-        await this.downloadExport(format);
-        document.getElementById("exportModal").classList.remove("active");
-      });
-    });
-  }
-
-  async downloadExport(format) {
-    try {
-      const resp = await fetch("/api/export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          annotations: this.annotations.map((a) => ({
-            id: a.id,
-            label: a.label,
-            color: a.color,
-            type: a.type,
-            points: a.points,
-            text: a.text || "",
-            properties: a.properties || {}
-          })),
-          format: format
-        })
-      });
-      const blob = await resp.blob();
+      const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `tranchot_studio_export.${format === "label_studio" || format === "coco" ? "json" : format === "gpkg" ? "gpkg" : "geojson"}`;
+      a.download = format === "shapefile_zip" ? "tranchot_shapefiles.zip" : `tranchot_layers.${format === "gpkg" ? "gpkg" : "geojson"}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
-    } catch (err) {
-      alert("Export fehlgeschlagen.");
+
+      this.showStatus(`✅ Export erfolgreich heruntergeladen!`);
+    } catch (e) {
+      this.showStatus(`Exportfehler: ${e.message}`, true);
     }
+  }
+
+  // ==========================================
+  // UI & Event Bindings
+  // ==========================================
+  setupUI() {
+    // Theme Toggle
+    document.getElementById("btnThemeToggle").onclick = () => this.toggleTheme();
+
+    // Tool buttons
+    const toolBtns = document.querySelectorAll(".tool-btn");
+    toolBtns.forEach((btn) => {
+      btn.onclick = () => {
+        toolBtns.forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        this.currentTool = btn.dataset.tool;
+
+        const bannerText = {
+          stamp: "🖌️ Stempel-Modus aktiv: Klicke auf Wald- oder Wiesenflächen, um Farbtöne aufzunehmen.",
+          pan: "🖐️ Pan-Modus: Klicke und ziehe, um die Karte frei zu bewegen.",
+        }[this.currentTool] || "";
+
+        document.getElementById("bannerText").innerText = bannerText;
+      };
+    });
+
+    // Class selection tabs
+    const classTabs = document.querySelectorAll(".class-tab");
+    classTabs.forEach((tab) => {
+      tab.onclick = () => {
+        classTabs.forEach((t) => t.classList.remove("active"));
+        tab.classList.add("active");
+        this.activeClassId = tab.dataset.class;
+        this.activeClassLabel = tab.querySelector("span:last-child").innerText;
+        this.activeClassColor = tab.style.getPropertyValue("--c");
+
+        document.getElementById("activeClassName").innerText = this.activeClassLabel;
+        document.getElementById("activeClassSwatch").style.background = this.activeClassColor;
+        if (this.cursorRing) {
+          this.cursorRing.setStyle({ color: this.activeClassColor, fillColor: this.activeClassColor });
+        }
+        this.refreshStampChipsUI();
+      };
+    });
+
+    // Stamp radius slider
+    const sliderRadius = document.getElementById("sliderStampRadius");
+    sliderRadius.oninput = (e) => {
+      this.stampRadius = parseInt(e.target.value);
+      document.getElementById("lblStampRadiusVal").innerText = `${this.stampRadius} px (Mausrad: 2–120 px)`;
+      if (this.cursorRing) {
+        this.cursorRing.setRadius(this.stampRadius);
+      }
+    };
+
+    // Calculate Land Use button
+    document.getElementById("btnRunLandUseExtraction").onclick = () => this.runLandUseExtraction();
+    document.getElementById("btnExtractLandUse").onclick = () => this.runLandUseExtraction();
+
+    // Building Extraction button
+    if (document.getElementById("btnExtractBuildings")) {
+      document.getElementById("btnExtractBuildings").onclick = () => this.runBuildingExtraction();
+    }
+    if (document.getElementById("btnExtractBuildingsTop")) {
+      document.getElementById("btnExtractBuildingsTop").onclick = () => this.runBuildingExtraction();
+    }
+
+    // Min Building Area Slider
+    const sliderMinBldg = document.getElementById("sliderMinBldgArea");
+    if (sliderMinBldg) {
+      sliderMinBldg.oninput = (e) => {
+        document.getElementById("lblMinBldgArea").innerText = `${e.target.value} px²`;
+      };
+    }
+
+    // Clear stamps button
+    document.getElementById("btnClearCurrentStamps").onclick = () => this.clearClassStamps(this.activeClassId);
+
+    // Normalization & Enhancement buttons
+    document.getElementById("btnPaper100").onclick = () => {
+      document.getElementById("sliderDeyellow").value = 90;
+      document.getElementById("lblDeyellowVal").innerText = "90%";
+      document.getElementById("sliderVibrance").value = 175;
+      document.getElementById("lblVibranceVal").innerText = "1.75x";
+      document.getElementById("chkInkBlack").checked = true;
+      this.applyEnhancement({
+        deyellow_strength: 0.9,
+        vibrance: 1.75,
+        contrast: 1.0,
+        ink_blackening: true,
+      });
+    };
+
+    document.getElementById("btnQuickNormalize").onclick = () => {
+      document.getElementById("btnPaper100").click();
+    };
+
+    document.getElementById("btnApplyEnhance").onclick = () => {
+      this.applyEnhancement({
+        deyellow_strength: parseInt(document.getElementById("sliderDeyellow").value) / 100.0,
+        vibrance: parseInt(document.getElementById("sliderVibrance").value) / 100.0,
+        contrast: parseInt(document.getElementById("sliderContrast").value) / 100.0,
+        ink_blackening: document.getElementById("chkInkBlack").checked,
+      });
+    };
+
+    // Sliders event listeners
+    document.getElementById("sliderDeyellow").oninput = (e) => {
+      document.getElementById("lblDeyellowVal").innerText = `${e.target.value}%`;
+    };
+    document.getElementById("sliderVibrance").oninput = (e) => {
+      document.getElementById("lblVibranceVal").innerText = `${(parseInt(e.target.value) / 100).toFixed(2)}x`;
+    };
+    document.getElementById("sliderContrast").oninput = (e) => {
+      document.getElementById("lblContrastVal").innerText = `${(parseInt(e.target.value) / 100).toFixed(2)}x`;
+    };
+
+    // Layer Opacity & Visibility Listeners
+    const bindLayerControls = (cid, chkId, sliderId) => {
+      const chk = document.getElementById(chkId);
+      const slider = document.getElementById(sliderId);
+      if (chk) {
+        chk.onchange = () => {
+          if (this.layers[cid]) {
+            if (chk.checked) {
+              this.layers[cid].addTo(this.map);
+            } else {
+              this.map.removeLayer(this.layers[cid]);
+            }
+          }
+        };
+      }
+      if (slider) {
+        slider.oninput = (e) => {
+          const val = parseInt(e.target.value) / 100.0;
+          if (this.layers[cid]) {
+            this.layers[cid].eachLayer((l) => {
+              if (l.setStyle) l.setStyle({ fillOpacity: val });
+            });
+          }
+        };
+      }
+    };
+
+    bindLayerControls("forest", "chkLayerForest", "opacityForest");
+    bindLayerControls("meadow", "chkLayerMeadow", "opacityMeadow");
+    bindLayerControls("water", "chkLayerWater", "opacityWater");
+    bindLayerControls("building", "chkLayerBuildings", "opacityBuildings");
+    bindLayerControls("vineyard", "chkLayerVineyard", "opacityVineyard");
+    bindLayerControls("gravel", "chkLayerGravel", "opacityGravel");
+    bindLayerControls("garden", "chkLayerGarden", "opacityGarden");
+
+    // Delete single layer buttons
+    document.querySelectorAll(".btn-del-layer").forEach((btn) => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const layerId = btn.dataset.layer;
+        if (this.layers[layerId]) {
+          this.layers[layerId].clearLayers();
+        }
+        this.allExtractedFeatures = this.allExtractedFeatures.filter((f) => f.properties.class_id !== layerId);
+        const cntMap = {
+          forest: "cntForest",
+          meadow: "cntMeadow",
+          water: "cntWater",
+          building: "cntBuildings",
+          vineyard: "cntVineyard",
+          gravel: "cntGravel",
+          garden: "cntGarden",
+        };
+        if (cntMap[layerId] && document.getElementById(cntMap[layerId])) {
+          document.getElementById(cntMap[layerId]).innerText = "0";
+        }
+        const polyCnt = document.getElementById("statusPolyCount");
+        if (polyCnt) polyCnt.innerText = `${this.allExtractedFeatures.length} Flächen geladen`;
+        this.showStatus(`🗑️ Ebene '${layerId}' erfolgreich gelöscht.`);
+      };
+    });
+
+    // Clear all layers
+    const btnClearAll = document.getElementById("btnClearAllLayers");
+    if (btnClearAll) {
+      btnClearAll.onclick = () => {
+        for (const [k, group] of Object.entries(this.layers)) {
+          if (k !== "stampMarkers") group.clearLayers();
+        }
+        this.allExtractedFeatures = [];
+        ["cntForest", "cntMeadow", "cntWater", "cntBuildings", "cntVineyard", "cntGravel", "cntGarden"].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.innerText = "0";
+        });
+        const polyCnt = document.getElementById("statusPolyCount");
+        if (polyCnt) polyCnt.innerText = "0 Flächen geladen";
+        this.showStatus("🗑️ Alle Vektor-Ebenen geleert.");
+      };
+    }
+
+    // Export Menu
+    const btnExportMenu = document.getElementById("btnExportMenu");
+    const exportDropdown = document.getElementById("exportDropdown");
+    btnExportMenu.onclick = (e) => {
+      e.stopPropagation();
+      exportDropdown.classList.toggle("show");
+    };
+    window.onclick = () => exportDropdown.classList.remove("show");
+
+    document.getElementById("exportGeoJSON").onclick = (e) => {
+      e.preventDefault();
+      this.exportData("geojson");
+    };
+    document.getElementById("exportShapefile").onclick = (e) => {
+      e.preventDefault();
+      this.exportData("shapefile_zip");
+    };
+    document.getElementById("exportGPKG").onclick = (e) => {
+      e.preventDefault();
+      this.exportData("gpkg");
+    };
+
+    // Preset selection change
+    document.getElementById("presetSelect").onchange = (e) => {
+      if (e.target.value) this.loadImage(e.target.value);
+    };
+
+    // File Upload
+    document.getElementById("btnUploadMap").onclick = () => document.getElementById("fileInputMap").click();
+    document.getElementById("fileInputMap").onchange = (e) => {
+      if (e.target.files && e.target.files[0]) {
+        const fd = new FormData();
+        fd.append("file", e.target.files[0]);
+        this.showStatus(`Lade Datei ${e.target.files[0].name}...`);
+        fetch("/api/load_image", { method: "POST", body: fd })
+          .then((r) => r.json())
+          .then((data) => {
+            this.imageWidth = data.width;
+            this.imageHeight = data.height;
+            this.imageLoaded = true;
+            this.updateImageOverlay(data.image_data);
+            this.showStatus(`🗺️ Geladen: ${data.filename}`);
+          });
+      }
+    };
+
+    // Fit view button
+    document.getElementById("btnFitView").onclick = () => {
+      if (this.imageLoaded) {
+        this.map.fitBounds([
+          [0, 0],
+          [this.imageHeight, this.imageWidth],
+        ], { padding: [10, 10] });
+      }
+    };
+
+    // Accordion card toggles
+    document.querySelectorAll(".card-header").forEach((header) => {
+      header.onclick = () => {
+        header.parentElement.classList.toggle("active");
+      };
+    });
   }
 
   setupKeyboardShortcuts() {
     window.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        this.commitSAMCandidate();
-      } else if (e.key === "Escape") {
-        this.clearPrompts();
-      } else if (e.key === "w" || e.key === "W") {
-        document.getElementById("toolSAM").click();
-      } else if (e.key === "b" || e.key === "B" || e.key === "r" || e.key === "R") {
-        const b = document.getElementById("toolSAMBox");
-        if (b) b.click();
-      } else if (e.key === "p" || e.key === "P") {
-        document.getElementById("toolPoly").click();
-      } else if (e.key === "e" || e.key === "E") {
-        document.getElementById("toolEdit").click();
-      } else if (e.key === "h" || e.key === "H") {
-        document.getElementById("toolPan").click();
-      } else if (e.key >= "1" && e.key <= "7") {
-        const chips = document.querySelectorAll(".class-chip");
-        const idx = parseInt(e.key) - 1;
-        if (chips[idx]) chips[idx].click();
-      }
+      if (e.key === "s" || e.key === "S") document.getElementById("toolStamp").click();
+      if (e.key === "h" || e.key === "H") document.getElementById("toolPan").click();
     });
+  }
+
+  showStatus(msg, isError = false) {
+    const el = document.getElementById("statusMessage");
+    if (el) {
+      el.innerText = msg;
+      el.style.color = isError ? "#ef4444" : "var(--text-muted)";
+    }
   }
 }
 
-window.addEventListener("DOMContentLoaded", () => {
-  window.app = new LeafletLabelStudio();
+// Instantiate on load
+document.addEventListener("DOMContentLoaded", () => {
+  window.app = new TranchotWebGISStudio();
 });

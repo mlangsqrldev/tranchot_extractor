@@ -1,18 +1,27 @@
 """
-High-Speed Land-Use Extractor for Tranchot Historical Maps.
-Segments Forests (Wald), Meadows/Pastures (Wiesen/Feuchtgrünland), and Water bodies (Gewässer).
-Uses parchment-normalized spectral analysis and tree-foliage texture detection
-to be robust against yellow paper aging, mountain hachures, and text overlays.
+High-Speed Land-Use Extractor for Tranchot Historical Maps (1803–1820).
+Segments Forests (Wald), Meadows/Pastures (Wiesen/Weiden), and Watercourses/Water bodies (Flüsse/Bäche/Teiche).
+
+Specialized Multi-Cue Architecture:
+Because French military cartographers used the exact same cyan-green watercolor wash
+(Verdigris / Grünspan & Indigo) on rag paper for both watercourses and alluvial meadows (Delta E < 3.5),
+this extractor uses a 5-Pillar Multi-Cue Architecture:
+1. Topological Hierarchy: Meadow = Alluvial Valley Basin minus Buffered Stream Network
+2. Geometric Dimensionality: 1D tubular ribbons (rivers/streams) vs. 2D parcels (meadows)
+3. Dual Bank Lines & Scharr Gradients: High-contrast ink contours bounding watercourses
+4. Riparian Signature: Pollard willows (Kopfweiden) along river banks
+5. Standing Water Bodies: Ponds and mill basins directly connected to stream channels
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple
 import time
 import numpy as np
 import cv2
-from shapely.geometry import Polygon, MultiPolygon, Point
+from shapely.geometry import Polygon, MultiPolygon, Point, LineString
 from shapely.ops import unary_union
 import geopandas as gpd
+from skimage.filters import frangi
 
 from tranchot_extractor.config import LandUseConfig
 
@@ -41,8 +50,8 @@ class LandUseExtractor:
     """
     Extracts historical land-use categories:
     - Forest (Wald): Olive-green wash + engraved tree foliage crown textures
-    - Meadow (Wiesen / Feuchtgrünland): Cyan-pastell valley meadows and gardens
-    - Water (Gewässer): Rhine River, streams, ponds, and lakes
+    - Meadow (Wiesen / Weiden): Alluvial cyan-green valley meadows and pastures
+    - Water (Flüsse / Bäche / Teiche): Linear stream channels, mill races, ponds, and rivers
     """
 
     def __init__(self, config: Optional[LandUseConfig] = None):
@@ -50,15 +59,16 @@ class LandUseExtractor:
 
     def extract(self, image_rgb: np.ndarray) -> LandUseExtractionResult:
         """
-        Fast extraction of land-use polygons with parchment normalization and texture bridging.
+        Extracts land-use features with 5-Pillar stream vs. meadow separation.
         """
         t0 = time.time()
         h, w = image_rgb.shape[:2]
 
-        # 1. Multi-scale Pyramidal Downsampling for 100x Speedup on large GeoTIFFs
+        # 1. Multi-scale Pyramidal Downsampling for high processing speed on large GeoTIFFs
         max_dim = max(h, w)
-        if max_dim > 1800:
-            scale_factor = 1800.0 / max_dim
+        max_proc = getattr(self.config, "max_processing_dim", 2048)
+        if max_dim > max_proc:
+            scale_factor = float(max_proc) / float(max_dim)
             small = cv2.resize(image_rgb, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_AREA)
         else:
             scale_factor = 1.0
@@ -66,69 +76,119 @@ class LandUseExtractor:
 
         inv_scale = 1.0 / scale_factor
 
-        # 2. Color Spaces & Texture Computation
+        # 2. Color Spaces and Channels
         gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY).astype(np.float32)
-        hsv = cv2.cvtColor(small, cv2.COLOR_RGB2HSV).astype(np.float32)
-        lab = cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32)
         r = small[:, :, 0].astype(float)
         g = small[:, :, 1].astype(float)
         b = small[:, :, 2].astype(float)
 
-        # Texture variance (measures tree-stamp roughness vs. smooth water/meadow watercolor)
+        # Parchment background & roads (dry warm tones)
+        is_paper_or_road = (r - b > 24) | (r - g > 12) | (gray > 220)
+
+        # Text / black ink mask (labels like 'Moulin', 'Kretz', 'Plaidt')
+        text_ink = (gray < 112) & (r < 118) & (b < 118)
+        text_dilated = cv2.dilate(text_ink.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))) > 0
+
+        # Texture variance for tree crown stamps
         blur_g = cv2.GaussianBlur(gray, (13, 13), 0)
         local_var = cv2.GaussianBlur((gray - blur_g) ** 2, (13, 13), 0)
-        tex_norm = (local_var - 35.0) / 25.0
 
-        # Relative chrominance against parchment paper
-        rel_green = g - (r * 0.88)
-        rel_blue = b - (r * 0.68)
+        # -------------------------------------------------------------
+        # Phase 1: Forest Extraction (Wald)
+        # -------------------------------------------------------------
+        # Olive-green wash + crown texture variance, excluding paper and roads
+        is_forest = (g > b + 12) & (r < 165) & (g < 170) & (local_var > 30) & (~is_paper_or_road)
 
-        # 3. Competitive Multi-Class Distance Metric
-        # Class 0: Water (Blue, smooth)
-        d_water_l = (lab[:, :, 0] - 150.0) * 0.4
-        d_water_a = (lab[:, :, 1] - 122.0) * 1.8
-        d_water_b = (lab[:, :, 2] - 115.0) * 1.8
-        dist_water = np.sqrt(d_water_l**2 + d_water_a**2 + d_water_b**2) + (tex_norm * 8.0)
-        # Blue bonus
-        dist_water -= np.clip(rel_blue * 1.2, 0, 30)
-
-        # Class 1: Forest (Olive-green, tree stamps / high texture)
-        d_forest_l = (lab[:, :, 0] - 128.0) * 0.4
-        d_forest_a = (lab[:, :, 1] - 122.0) * 1.8
-        d_forest_b = (lab[:, :, 2] - 138.0) * 1.8
-        dist_forest = np.sqrt(d_forest_l**2 + d_forest_a**2 + d_forest_b**2) - (tex_norm * 10.0)
-        dist_forest -= np.clip(rel_green * 0.8, 0, 20)
-
-        # Class 2: Meadow / Pasture (Cyan-Pastell, smooth)
-        d_meadow_l = (lab[:, :, 0] - 165.0) * 0.4
-        d_meadow_a = (lab[:, :, 1] - 118.0) * 1.8
-        d_meadow_b = (lab[:, :, 2] - 130.0) * 1.8
-        dist_meadow = np.sqrt(d_meadow_l**2 + d_meadow_a**2 + d_meadow_b**2) + (tex_norm * 6.0)
-        dist_meadow -= np.clip(rel_green * 1.4, 0, 25)
-
-        # Class 3: Background / Pergament / Ackerland
-        d_paper_l = (lab[:, :, 0] - 190.0) * 0.4
-        d_paper_a = (lab[:, :, 1] - 128.0) * 1.8
-        d_paper_b = (lab[:, :, 2] - 142.0) * 1.8
-        dist_paper = np.sqrt(d_paper_l**2 + d_paper_a**2 + d_paper_b**2)
-
-        # Stack distances and find competitive winner
-        dist_stack = np.stack([dist_water, dist_forest, dist_meadow, dist_paper], axis=2)
-        winner = np.argmin(dist_stack, axis=2)
-
-        # 4. Clean class binary masks
         k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
         k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        forest_clean = cv2.morphologyEx(is_forest.astype(np.uint8) * 255, cv2.MORPH_CLOSE, k_close)
+        forest_clean = cv2.morphologyEx(forest_clean, cv2.MORPH_OPEN, k_open)
 
-        water_mask = cv2.morphologyEx(((winner == 0) & (rel_blue > 4)).astype(np.uint8) * 255, cv2.MORPH_CLOSE, k_close)
-        forest_mask = cv2.morphologyEx(((winner == 1) & (dist_forest < 38)).astype(np.uint8) * 255, cv2.MORPH_CLOSE, k_close)
-        forest_clean = cv2.morphologyEx(forest_mask, cv2.MORPH_OPEN, k_open)
+        # -------------------------------------------------------------
+        # Phase 2: Alluvial Valley Wash Extraction (Talraum-Lasur)
+        # -------------------------------------------------------------
+        # Cyan-green watercolor wash shared by both meadows and streams
+        is_valley = (g >= r - 6) & (b >= r - 26) & (r < 205) & (g > 130) & (b > 120) & (~is_paper_or_road) & (forest_clean == 0)
+        valley_closed = cv2.morphologyEx(is_valley.astype(np.uint8) * 255, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13)))
+        valley_closed[forest_clean > 0] = 0
 
-        meadow_mask = cv2.morphologyEx(((winner == 2) & (rel_green > 2)).astype(np.uint8) * 255, cv2.MORPH_CLOSE, k_close)
-        meadow_clean = cv2.morphologyEx(meadow_mask, cv2.MORPH_OPEN, k_open)
+        # Filter valley to genuine continuous valley floors
+        num_v, labels_v, stats_v, _ = cv2.connectedComponentsWithStats(valley_closed)
+        clean_valley = np.zeros_like(valley_closed)
+        for i in range(1, num_v):
+            if stats_v[i, cv2.CC_STAT_AREA] >= 400:
+                clean_valley[labels_v == i] = 255
 
-        # 5. Vectorize & Scale Back to Full Image Resolution
-        def vectorize_mask(mask_u8, min_area_full_px: float) -> List[Polygon]:
+        # -------------------------------------------------------------
+        # Phase 3: Multi-Cue Watercourse Extraction (Flüsse / Bäche / Teiche)
+        # -------------------------------------------------------------
+        # A. Direct digital blue water detection (modern maps, lakes, synthetic tests)
+        direct_blue = (b > r + 25) & (b > g + 5)
+
+        # B. Valley core: exclude outer step boundary against parchment paper
+        valley_core = cv2.erode(clean_valley, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+
+        # C. Historical stream tubular ridge response on natural inverted gray
+        inv_gray = (255.0 - gray) / 255.0
+        ridge_sigmas = getattr(self.config, "stream_ridge_sigmas", (1.0, 1.8, 2.8, 4.0))
+        ridge = frangi(inv_gray, sigmas=list(ridge_sigmas), black_ridges=False)
+
+        stream_raw = direct_blue.copy()
+        if np.any(valley_core > 0):
+            v_vals = ridge[valley_core > 0]
+            if len(v_vals) > 0 and np.max(v_vals) > 0:
+                p98 = np.percentile(v_vals, 98.5)
+                ridge_norm = np.clip(ridge / (p98 + 1e-6), 0, 1.0)
+                blue_core = (b >= r - 12) & (g >= r - 4) & (gray < 175) & (valley_core > 0)
+                ridge_water = ((ridge_norm > 0.40) & (gray < 185) & (valley_core > 0)) | (blue_core & (ridge_norm > 0.20))
+                # Suppress roads, text ink, and forest
+                ridge_water &= (~is_paper_or_road) & (~text_dilated) & (forest_clean == 0)
+                stream_raw |= ridge_water
+
+        # Bridge stream segments across small dams, weirs, and bridges
+        stream_bridged = cv2.morphologyEx(stream_raw.astype(np.uint8) * 255, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+
+        # Connected component filtering: Streams are elongated tubular networks or ponds
+        num_s, labels_s, stats_s, _ = cv2.connectedComponentsWithStats(stream_bridged)
+        clean_stream = np.zeros_like(stream_bridged)
+        for i in range(1, num_s):
+            area = stats_s[i, cv2.CC_STAT_AREA]
+            bw = stats_s[i, cv2.CC_STAT_WIDTH]
+            bh = stats_s[i, cv2.CC_STAT_HEIGHT]
+            span = max(bw, bh)
+            min_dim = min(bw, bh)
+            aspect = span / (min_dim + 1e-4)
+            # Elongated streams OR continuous network length OR direct blue ponds
+            if (span >= 35 and aspect >= 2.0) or (span >= 70) or (area >= 40 and np.any(direct_blue[labels_s == i])):
+                clean_stream[labels_s == i] = 255
+
+        # -------------------------------------------------------------
+        # Phase 4: Topological Subtraction for Meadows (Wiesen / Weiden)
+        # Meadow = Valley Wash minus Buffered Stream Network
+        # -------------------------------------------------------------
+        buf_radius = getattr(self.config, "stream_dilation_buffer_px", 4)
+        k_buf = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * buf_radius + 1, 2 * buf_radius + 1))
+        stream_buf = cv2.dilate(clean_stream, k_buf)
+
+        meadow_raw = cv2.bitwise_and(clean_valley, cv2.bitwise_not(stream_buf))
+        meadow_raw[is_paper_or_road] = 0
+        meadow_raw[text_dilated] = 0
+        meadow_raw[forest_clean > 0] = 0
+
+        # Polish meadow parcels: remove thin slivers and bridge internal parcel lines
+        meadow_clean = cv2.morphologyEx(meadow_raw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+        meadow_clean = cv2.morphologyEx(meadow_clean, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+
+        num_m, labels_m, stats_m, _ = cv2.connectedComponentsWithStats(meadow_clean)
+        final_meadow = np.zeros_like(meadow_clean)
+        for i in range(1, num_m):
+            if stats_m[i, cv2.CC_STAT_AREA] >= 150:
+                final_meadow[labels_m == i] = 255
+
+        # -------------------------------------------------------------
+        # Phase 5: Vectorization & Resolution Rescaling
+        # -------------------------------------------------------------
+        def vectorize_mask(mask_u8: np.ndarray, min_area_full_px: float) -> List[Polygon]:
             cnts, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             polys = []
             for cnt in cnts:
@@ -141,9 +201,13 @@ class LandUseExtractor:
                             polys.append(p_geom.simplify(2.0, preserve_topology=True))
             return polys
 
-        forest_polys = vectorize_mask(forest_clean, min_area_full_px=600.0)
-        meadow_polys = vectorize_mask(meadow_clean, min_area_full_px=300.0)
-        water_polys = vectorize_mask(water_mask, min_area_full_px=150.0)
+        min_forest_area = getattr(self.config, "min_forest_area_px", 600.0)
+        min_meadow_area = getattr(self.config, "min_meadow_area_px", 250.0)
+        min_water_area = getattr(self.config, "min_water_area_px", 40.0)
+
+        forest_polys = vectorize_mask(forest_clean, min_area_full_px=min_forest_area)
+        meadow_polys = vectorize_mask(final_meadow, min_area_full_px=min_meadow_area)
+        water_polys = vectorize_mask(clean_stream, min_area_full_px=min_water_area)
 
         features: List[LandUseFeature] = []
         feat_id = 1

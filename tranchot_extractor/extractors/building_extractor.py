@@ -11,10 +11,36 @@ import numpy as np
 import cv2
 from scipy.ndimage import maximum_filter
 from shapely.geometry import Polygon, MultiPolygon
+from shapely.affinity import translate
 from shapely.ops import unary_union
+from shapely.validation import make_valid
 import geopandas as gpd
 
 from tranchot_extractor.config import BuildingConfig
+
+
+def unpack_polygons(geom: Any) -> List[Polygon]:
+    """
+    Recursively extracts all valid 2D Polygon instances from any geometry,
+    including Polygon, MultiPolygon, GeometryCollection, and handles make_valid outputs.
+    """
+    out: List[Polygon] = []
+    if geom is None or geom.is_empty:
+        return out
+    if not geom.is_valid:
+        geom = make_valid(geom)
+    if isinstance(geom, Polygon):
+        if not geom.is_empty and geom.area > 0:
+            out.append(geom)
+    elif isinstance(geom, MultiPolygon):
+        for sub in geom.geoms:
+            if isinstance(sub, Polygon) and not sub.is_empty and sub.area > 0:
+                out.append(sub)
+    elif hasattr(geom, "geoms"):
+        for sub in geom.geoms:
+            out.extend(unpack_polygons(sub))
+    return out
+
 
 
 @dataclass
@@ -217,7 +243,16 @@ def separate_building_clusters(comp_mask: np.ndarray, min_area: float = 6.0) -> 
     if comp_area < 35.0:
         return [comp_mask]
 
-    dist = cv2.distanceTransform(comp_mask, cv2.DIST_L2, 5)
+    pts = cv2.findNonZero(comp_mask)
+    if pts is None:
+        return [comp_mask]
+    bx, by, bw, bh = cv2.boundingRect(pts)
+    pad = 4
+    x0, y0 = max(0, bx - pad), max(0, by - pad)
+    x1, y1 = min(comp_mask.shape[1], bx + bw + pad), min(comp_mask.shape[0], by + bh + pad)
+
+    local_comp = comp_mask[y0:y1, x0:x1]
+    dist = cv2.distanceTransform(local_comp, cv2.DIST_L2, 5)
     max_d = dist.max()
     if max_d < 2.0:
         return [comp_mask]
@@ -230,72 +265,25 @@ def separate_building_clusters(comp_mask: np.ndarray, min_area: float = 6.0) -> 
     if num_peaks <= 2:
         return [comp_mask]
 
-    markers[comp_mask == 0] = num_peaks
-    grad = cv2.cvtColor(255 - comp_mask, cv2.COLOR_GRAY2BGR)
+    markers[local_comp == 0] = num_peaks
+    grad = cv2.cvtColor(255 - local_comp, cv2.COLOR_GRAY2BGR)
     cv2.watershed(grad, markers)
 
     separated = []
     for m_id in range(1, num_peaks):
-        w_mask = ((markers == m_id) & (comp_mask > 0)).astype(np.uint8) * 255
-        if cv2.countNonZero(w_mask) >= min_area:
-            separated.append(w_mask)
+        w_sub = ((markers == m_id) & (local_comp > 0)).astype(np.uint8) * 255
+        if cv2.countNonZero(w_sub) >= min_area:
+            w_full = np.zeros_like(comp_mask)
+            w_full[y0:y1, x0:x1] = w_sub
+            separated.append(w_full)
 
     return separated if separated else [comp_mask]
-
-
-def despike_and_regularize(poly: Polygon, simplify_eps: float = 2.5) -> Tuple[Polygon, float]:
-    """
-    Consolidates building geometry, eliminates single-pixel staircase spikes, and regularizes
-    footprints into crisp architectural rectangular/Manhattan shapes.
-    """
-    if not poly.is_valid or poly.is_empty:
-        return poly, 0.0
-
-    coords = np.array(poly.exterior.coords, dtype=np.float32)
-    if len(coords) < 4:
-        return poly, 0.0
-
-    cnt = coords.reshape(-1, 1, 2).astype(np.int32)
-    rect = cv2.minAreaRect(cnt)
-    (cx, cy), (rw, rh), angle = rect
-    min_box_area = rw * rh
-    area = poly.area
-    rect_ratio = area / (min_box_area + 1e-6)
-
-    hull = cv2.convexHull(cnt)
-    solidity = area / (cv2.contourArea(hull) + 1e-6)
-
-    # 1. Simple freestanding rectangular houses (without courtyard holes) -> 4-corner bounding rectangle
-    if len(poly.interiors) == 0 and ((rect_ratio >= 0.68 and solidity >= 0.72) or (area <= 220.0 and solidity >= 0.70)):
-        box_pts = np.intp(cv2.boxPoints(rect))
-        p_rect = Polygon(box_pts)
-        if p_rect.is_valid and not p_rect.is_empty:
-            return p_rect, angle
-
-    # 2. Complex farmsteads / courtyard wings -> Snap to 90 degree orthogonal Manhattan ring
-    p_man = regularize_manhattan_contour(cnt, angle_deg=angle, simplify_eps=simplify_eps)
-    if p_man is not None and p_man.is_valid and not p_man.is_empty:
-        # Preserve interior courtyards
-        for interior in poly.interiors:
-            h_pts = np.array(interior.coords)
-            if len(h_pts) >= 4:
-                h_poly = Polygon(h_pts).buffer(0)
-                if h_poly.is_valid and h_poly.area >= 12.0:
-                    try:
-                        p_man = p_man.difference(h_poly)
-                    except Exception:
-                        pass
-        if isinstance(p_man, Polygon):
-            return p_man, angle
-
-    # 3. Fallback Douglas-Peucker simplification
-    return poly.simplify(simplify_eps, preserve_topology=True), angle
 
 
 def regularize_orthogonal_ring(
     coords: np.ndarray,
     dominant_angle_deg: float,
-    snap_threshold_deg: float = 18.0,
+    snap_threshold_deg: float = 22.0,
 ) -> np.ndarray:
     """
     Snaps polygon edges to crisp 90-degree orthogonal angles aligned with
@@ -339,6 +327,89 @@ def regularize_orthogonal_ring(
     return np.array(res, dtype=np.float64)
 
 
+def despike_and_regularize(poly: Polygon, simplify_eps: float = 2.0) -> Tuple[Any, float]:
+    """
+    Consolidates building geometry, eliminates single-pixel staircase spikes, and regularizes
+    footprints into crisp architectural rectangular/Manhattan shapes.
+    Preserves and orthogonalizes interior courtyards (Hofanlagen).
+    """
+    if not poly.is_valid:
+        poly_valid = make_valid(poly)
+        unpacked = unpack_polygons(poly_valid)
+        if not unpacked:
+            return poly, 0.0
+        poly = max(unpacked, key=lambda p: p.area)
+
+    if poly.is_empty:
+        return poly, 0.0
+
+    coords = np.array(poly.exterior.coords, dtype=np.float32)
+    if len(coords) < 4:
+        return poly, 0.0
+
+    cnt = coords.reshape(-1, 1, 2).astype(np.int32)
+    rect = cv2.minAreaRect(cnt)
+    (cx, cy), (rw, rh), angle = rect
+    min_box_area = rw * rh
+    area = poly.area
+    rect_ratio = area / (min_box_area + 1e-6)
+
+    hull = cv2.convexHull(cnt)
+    solidity = area / (cv2.contourArea(hull) + 1e-6)
+    min_dim, max_dim = min(rw, rh), max(rw, rh)
+    aspect = max_dim / (min_dim + 1e-5)
+
+    # 1. Simple freestanding rectangular houses (without courtyard holes) -> 4-corner bounding rectangle
+    if len(poly.interiors) == 0:
+        is_rect = (
+            (rect_ratio >= 0.50 and solidity >= 0.72 and aspect <= 8.0) or
+            (solidity >= 0.80 and aspect <= 8.0) or
+            (area <= 350.0 and rect_ratio >= 0.45 and solidity >= 0.66) or
+            (min_dim <= 3.2 and aspect >= 2.0)
+        )
+        if is_rect:
+            box_pts = np.intp(cv2.boxPoints(rect))
+            p_rect = Polygon(box_pts)
+            if p_rect.is_valid and not p_rect.is_empty:
+                return p_rect, angle
+
+    # 2. Despike and orthogonalize exterior ring
+    ext_approx = cv2.approxPolyDP(cnt, simplify_eps, True).reshape(-1, 2)
+    if len(ext_approx) >= 3:
+        clean_ext = despike_and_simplify_ring(ext_approx, min_edge_len=3.5, spike_angle_deg=45.0)
+        clean_ext = regularize_orthogonal_ring(clean_ext, dominant_angle_deg=angle, snap_threshold_deg=22.0)
+    else:
+        clean_ext = ext_approx
+
+    # 3. Preserve, despike, and orthogonalize interior courtyard holes
+    clean_holes = []
+    for interior in poly.interiors:
+        h_cnt = np.array(interior.coords, dtype=np.int32).reshape(-1, 1, 2)
+        h_area = cv2.contourArea(h_cnt)
+        if h_area >= 15.0:
+            h_approx = cv2.approxPolyDP(h_cnt, simplify_eps, True).reshape(-1, 2)
+            if len(h_approx) >= 3:
+                h_clean = despike_and_simplify_ring(h_approx, min_edge_len=3.0, spike_angle_deg=45.0)
+                h_clean = regularize_orthogonal_ring(h_clean, dominant_angle_deg=angle, snap_threshold_deg=22.0)
+                if len(h_clean) >= 4:
+                    clean_holes.append(h_clean)
+
+    try:
+        p_res = Polygon(shell=clean_ext, holes=clean_holes if clean_holes else None)
+        if not p_res.is_valid:
+            p_res = p_res.buffer(0)
+        if p_res.is_valid and not p_res.is_empty:
+            return p_res, angle
+    except Exception:
+        pass
+
+    # 4. Fallback simplification
+    simplified = poly.simplify(simplify_eps, preserve_topology=True)
+    if not simplified.is_valid:
+        simplified = make_valid(simplified)
+    return simplified, angle
+
+
 class BuildingExtractor:
     """
     High-speed historical building and courtyard extractor.
@@ -360,6 +431,24 @@ class BuildingExtractor:
         """
         h, w = image_rgb.shape[:2]
 
+        # Fast ROI Crop Optimization: if settlement boundaries are provided, crop processing strictly to their bounds
+        x_off, y_off = 0, 0
+        if settlement_boundaries and len(settlement_boundaries) > 0:
+            minx = min(sb.bounds[0] for sb in settlement_boundaries)
+            miny = min(sb.bounds[1] for sb in settlement_boundaries)
+            maxx = max(sb.bounds[2] for sb in settlement_boundaries)
+            maxy = max(sb.bounds[3] for sb in settlement_boundaries)
+            pad = 25
+            x0 = max(0, int(minx) - pad)
+            y0 = max(0, int(miny) - pad)
+            x1 = min(w, int(maxx) + pad)
+            y1 = min(h, int(maxy) + pad)
+            if (x1 - x0) > 20 and (y1 - y0) > 20 and ((x1 - x0) < w or (y1 - y0) < h):
+                image_rgb = image_rgb[y0:y1, x0:x1]
+                x_off, y_off = x0, y0
+                h, w = image_rgb.shape[:2]
+                settlement_boundaries = [translate(sb, xoff=-x0, yoff=-y0) for sb in settlement_boundaries]
+
         # 1. Multi-space carmine ink segmentation (HSV ∩ LAB ∩ RGB-diff)
         hsv = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2HSV)
         lab = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2LAB)
@@ -370,42 +459,99 @@ class BuildingExtractor:
 
         raw_polys: List[Tuple[Polygon, float]] = []
 
-        # A. Detect Solid Black Massivbauten, Churches, Castles & Stone Houses
-        black_mask = ((r < 75) & (g < 75) & (b < 75) & (gray < 75)).astype(np.uint8) * 255
-        k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        black_clean = cv2.morphologyEx(black_mask, cv2.MORPH_CLOSE, k_close)
+        # Boundary mask if settlement boundaries provided
+        scope_mask = None
+        if settlement_boundaries and len(settlement_boundaries) > 0:
+            scope_mask = np.zeros((h, w), dtype=np.uint8)
+            for sb in settlement_boundaries:
+                if hasattr(sb, "exterior") and sb.exterior:
+                    pts = np.array(sb.exterior.coords, dtype=np.int32)
+                    if len(pts) >= 3:
+                        cv2.fillPoly(scope_mask, [pts], 255)
 
-        black_cnts, _ = cv2.findContours(black_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for cnt in black_cnts:
-            area = cv2.contourArea(cnt)
-            if 6.0 <= area <= 1500.0:
-                rect = cv2.minAreaRect(cnt)
-                (cx, cy), (rw, rh), angle = rect
-                min_dim, max_dim = min(rw, rh), max(rw, rh)
-                if min_dim >= 1.5:
-                    aspect = max_dim / (min_dim + 1e-5)
-                    solidity = area / (cv2.contourArea(cv2.convexHull(cnt)) + 1e-6)
-                    if solidity >= 0.58 and aspect <= 8.0:
-                        box = np.intp(cv2.boxPoints(rect))
-                        p = Polygon(box)
-                        if p.is_valid and not p.is_empty:
-                            raw_polys.append((p, angle))
+        # A. Detect Solid Black Massivbauten, Churches, Castles & Stone Houses (strictly optional, disabled by default to prevent lettering & hachures)
+        if getattr(self.config, "enable_black_buildings", False):
+            black_mask = ((r < 75) & (g < 75) & (b < 75) & (gray < 75)).astype(np.uint8) * 255
+            k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            black_clean = cv2.morphologyEx(black_mask, cv2.MORPH_CLOSE, k_close)
+            if scope_mask is not None:
+                black_clean = cv2.bitwise_and(black_clean, scope_mask)
 
-        # B. Detect Carmine Red Solid Buildings, Wings & Thin Walls
+            black_cnts, _ = cv2.findContours(black_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            min_blk_area = getattr(self.config, "min_black_building_area_px", 45.0)
+            min_blk_thick = getattr(self.config, "min_black_building_thickness_px", 4.5)
+            max_blk_aspect = getattr(self.config, "max_black_building_aspect_ratio", 3.8)
+            min_blk_solidity = getattr(self.config, "min_black_building_solidity", 0.72)
+
+            for cnt in black_cnts:
+                area = cv2.contourArea(cnt)
+                if min_blk_area <= area <= self.config.max_building_area_px:
+                    rect = cv2.minAreaRect(cnt)
+                    (cx, cy), (rw, rh), angle = rect
+                    min_dim, max_dim = min(rw, rh), max(rw, rh)
+                    if min_dim >= min_blk_thick:
+                        aspect = max_dim / (min_dim + 1e-5)
+                        solidity = area / (cv2.contourArea(cv2.convexHull(cnt)) + 1e-6)
+                        if solidity >= min_blk_solidity and aspect <= max_blk_aspect:
+                            box = np.intp(cv2.boxPoints(rect))
+                            p = Polygon(box)
+                            if p.is_valid and not p.is_empty:
+                                raw_polys.append((p, angle))
+
+        # B. Detect Carmine & Brownish/Terracotta Red Solid Buildings, Wings & Thin Walls
+        # 1. Estimate local parchment white point (bright, non-ink pixels)
+        paper_mask = (gray > 160) & (np.abs(r - g) < 32) & (np.abs(r - b) < 45)
+        if np.count_nonzero(paper_mask) > 100:
+            p_r = float(np.percentile(r[paper_mask], 85))
+            p_g = float(np.percentile(g[paper_mask], 85))
+            p_b = float(np.percentile(b[paper_mask], 85))
+        else:
+            p_r, p_g, p_b = 230.0, 220.0, 195.0
+
+        # 2. Optical Density (Beer-Lambert law): OD = -log10(I / I_paper)
+        od_r = -np.log10(np.clip(r.astype(np.float32) / (p_r + 1e-5), 0.01, 1.0))
+        od_g = -np.log10(np.clip(g.astype(np.float32) / (p_g + 1e-5), 0.01, 1.0))
+        carmine_od = od_g - od_r  # Pure carmine absorption signal
+
+        # 3. Normalized RGB (Von Kries chromatic adaptation)
+        r_norm = np.clip((r.astype(np.float32) / (p_r + 1e-5)) * 255.0, 0, 255).astype(np.int16)
+        g_norm = np.clip((g.astype(np.float32) / (p_g + 1e-5)) * 255.0, 0, 255).astype(np.int16)
+        b_norm = np.clip((b.astype(np.float32) / (p_b + 1e-5)) * 255.0, 0, 255).astype(np.int16)
+
         m_hue1 = cv2.inRange(hsv, np.array(self.config.hsv_lower_red1), np.array(self.config.hsv_upper_red1))
         m_hue2 = cv2.inRange(hsv, np.array(self.config.hsv_lower_red2), np.array(self.config.hsv_upper_red2))
-        m_hue = cv2.bitwise_or(m_hue1, m_hue2)
+        m_hue = cv2.bitwise_or(m_hue1, m_hue2) > 0
 
-        # LAB a* channel (green-red axis) isolates pure carmine from brown ink and vineyard terraces
+        # LAB a* channel (green-red axis) includes weathered terracotta, courtyard walls and carmine
         lab_a = lab[:, :, 1]
         lab_b = lab[:, :, 2]
-        m_lab = (lab_a >= self.config.lab_a_threshold) & (lab_a.astype(int) - lab_b.astype(int) >= -8)
+        m_lab = (lab_a >= self.config.lab_a_threshold) & (lab_a.astype(int) - lab_b.astype(int) >= -4)
 
         rgb_diff = self.config.rgb_diff_threshold
-        m_diff = ((r - g >= rgb_diff) & (r - b >= max(rgb_diff, 16)) & (r >= self.config.min_red_intensity)).astype(np.uint8) * 255
-        m_sat = (hsv[:, :, 1] >= 18).astype(np.uint8) * 255
+        min_red = self.config.min_red_intensity
+        min_norm_red = getattr(self.config, "min_norm_red_intensity", 135)
 
-        carmine_mask = cv2.bitwise_and(m_hue, cv2.bitwise_and(m_lab.astype(np.uint8) * 255, cv2.bitwise_and(m_diff, m_sat)))
+        # Carmine / terracotta red hue: H in [0, 16] or [165, 180], sat >= 22 (excludes yellow/ochre roads and brown iron-gall ink at H 22..45)
+        m_carmine_hue = ((hsv[:, :, 0] <= 16) | (hsv[:, :, 0] >= 165)) & (hsv[:, :, 1] >= 22)
+        m_od = (carmine_od >= getattr(self.config, "carmine_od_threshold", 0.035)) & (r_norm > g_norm) & (r_norm > b_norm) & (g_norm - r_norm < 12)
+        m_norm_diff = (r_norm - g_norm >= getattr(self.config, "norm_rgb_diff_threshold", 14)) & (r_norm - b_norm >= getattr(self.config, "norm_rgb_diff_threshold", 14))
+        m_legacy_diff = ((r.astype(int) - g.astype(int) >= rgb_diff) & (r.astype(int) - b.astype(int) >= max(rgb_diff, 8)))
+
+        # Gated Carmine Mask: every carmine pixel MUST strictly satisfy carmine hue, LAB red threshold, minimum red intensity, and positive normalized red excess
+        m_signal = (m_od | m_norm_diff | m_legacy_diff) & (r >= min_red) & (r_norm >= min_norm_red)
+        carmine_mask = (m_signal & m_carmine_hue & m_lab & (r_norm > g_norm)).astype(np.uint8) * 255
+        if scope_mask is not None:
+            carmine_mask = cv2.bitwise_and(carmine_mask, scope_mask)
+
+        # Morphological clean: only apply opening if explicitly requested, preserving fine 1-2 px walls
+        k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        carmine_mask = cv2.morphologyEx(carmine_mask, cv2.MORPH_CLOSE, k_close)
+        if getattr(self.config, "morph_kernel_size", 1) > 1 and self.config.min_stroke_width_px > 2.0:
+            k_open = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+            carmine_mask = cv2.morphologyEx(carmine_mask, cv2.MORPH_OPEN, k_open)
+
+        # Distance transform across candidate carmine pixels to enforce architectural building thickness
+        dist_all = cv2.distanceTransform(carmine_mask, cv2.DIST_L2, 3)
 
         # Extract and separate connected carmine components
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(carmine_mask, connectivity=8)
@@ -418,12 +564,38 @@ class BuildingExtractor:
             raw_comp = (labels == lbl).astype(np.uint8) * 255
 
             cnts_orig, hier_orig = cv2.findContours(raw_comp, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-            has_holes = False
+            num_large_holes = 0
+            total_hole_area = 0.0
             if hier_orig is not None:
-                has_holes = any(h_elem[2] != -1 for h_elem in hier_orig[0])
+                for h_elem in hier_orig[0]:
+                    if h_elem[2] != -1:
+                        child = h_elem[2]
+                        while child != -1:
+                            child_area = cv2.contourArea(cnts_orig[child])
+                            if child_area >= 35.0:
+                                num_large_holes += 1
+                                total_hole_area += child_area
+                            child = hier_orig[0][child][0]
 
-            # If component has closed interior courtyard holes, preserve as single enclosed courtyard
-            if has_holes:
+            comp_w = stats[lbl, cv2.CC_STAT_WIDTH]
+            comp_h = stats[lbl, cv2.CC_STAT_HEIGHT]
+            comp_thick = np.max(dist_all[raw_comp > 0]) * 2.0 if np.any(raw_comp > 0) else 0.0
+            hof_fill_ratio = comp_area / (comp_area + total_hole_area + 1e-6)
+
+            # A genuine individual Hofanlage has at most 2 internal yards, bounded span (<= 115 px), and substantial wall thickness
+            max_hof_span = getattr(self.config, "max_hof_span_px", 115.0)
+            max_hof_area = getattr(self.config, "max_unified_hof_area_px", 8500.0)
+            is_genuine_hof = (
+                (1 <= num_large_holes <= 2) and
+                (comp_area <= max_hof_area) and
+                (max(comp_w, comp_h) <= max_hof_span) and
+                (comp_thick >= 3.2) and
+                (hof_fill_ratio >= 0.18)
+            )
+
+            # If component is an authentic compact Hofanlage with courtyard, keep unified;
+            # otherwise separate touching houses along streets using watershed distance peaks
+            if is_genuine_hof:
                 wing_masks = [raw_comp]
             else:
                 wing_masks = separate_building_clusters(raw_comp, min_area=self.config.min_building_area_px)
@@ -453,66 +625,85 @@ class BuildingExtractor:
                         continue
 
                     aspect = max_dim / (min_dim + 1e-5)
-                    if aspect > self.config.max_aspect_ratio:
+                    allow_thin_walls = self.config.min_stroke_width_px <= 1.8
+                    max_aspect = 35.0 if self.config.min_stroke_width_px <= 1.0 else getattr(self.config, "max_aspect_ratio", 5.5)
+                    if aspect > max_aspect:
+                        continue
+
+                    # Narrow feature filter:
+                    # In 1:25000 scale, buildings have a minimum width of 5-7 meters (min_dim >= 4.5 px).
+                    # Narrow features (min_dim < 4.5 px) are only kept if compact (aspect <= 2.2), unless thin walls are enabled.
+                    if not allow_thin_walls:
+                        if min_dim < 4.5 and aspect > 2.2:
+                            continue
+                        if min_dim < 2.8:
+                            continue
+
+                    # Reject thin stone boundary lines, ditches, or garden perimeter fences
+                    wing_thick = np.max(dist_all[w_mask > 0]) * 2.0 if np.any(w_mask > 0) else 0.0
+                    min_thick = getattr(self.config, "min_building_thickness_px", 1.8)
+                    if not allow_thin_walls and wing_thick < min_thick and (aspect > 2.5 or area < 40.0):
+                        continue
+
+                    # Reject giant hollow loops enclosing gardens, streets or open parcels
+                    if area > 1200.0 and rectangularity < getattr(self.config, "min_courtyard_fill_ratio", 0.18):
                         continue
 
                     # Suppress vineyard hillside terrace hatching:
-                    # Terraces are thin (min_dim <= 2.2 px), isolated open line slivers with high aspect ratio (aspect >= 4.0)
-                    # and low solidity (solidity < 0.68) without interior courtyard holes.
+                    # Terraces are thin (min_dim < 2.5 px), open jagged slivers with high aspect ratio (aspect > 3.8)
+                    # and low rectangularity (rectangularity < 0.65). Crisp rectangular walls are preserved.
                     if self.config.filter_vineyard_terraces:
-                        is_vineyard_terrace = (
-                            min_dim <= 2.2 and
-                            aspect >= 4.0 and
-                            solidity < 0.68 and
-                            not has_holes and
-                            h_elem[2] == -1
-                        )
-                        if is_vineyard_terrace:
+                        if min_dim < 2.5 and aspect > 3.8 and rectangularity < 0.65:
+                            continue
+                        if area < 10.0 and (solidity < 0.60 or min_dim < 1.6):
                             continue
 
-                        if area < 8.0 and (solidity < 0.60 or min_dim < 1.4):
-                            continue
+                    # Suppress isolated orchard tree stamp dots:
+                    # Small area (<= 45 px) and compact (aspect <= 1.8) without courtyard holes
+                    if area <= 45.0 and aspect <= 1.8 and h_elem[2] == -1:
+                        continue
 
                     holes = []
                     child_idx = h_elem[2]
                     while child_idx != -1:
                         h_cnt = cnts[child_idx]
-                        if cv2.contourArea(h_cnt) > 8:
-                            h_rect = cv2.minAreaRect(h_cnt)
-                            holes.append(Polygon(np.intp(cv2.boxPoints(h_rect))))
+                        h_area = cv2.contourArea(h_cnt)
+                        if h_area >= 15.0:
+                            h_pts = cv2.approxPolyDP(h_cnt, 2.0, True).reshape(-1, 2)
+                            if len(h_pts) >= 3:
+                                h_clean = despike_and_simplify_ring(h_pts, min_edge_len=3.0, spike_angle_deg=45.0)
+                                if len(h_clean) >= 4:
+                                    h_clean = regularize_orthogonal_ring(h_clean, dominant_angle_deg=angle, snap_threshold_deg=22.0)
+                                    holes.append(h_clean)
                         child_idx = hier[0][child_idx][0]
 
-                    is_simple_rectangle = (
-                        (rectangularity >= 0.70 and solidity >= 0.78) or
-                        (area <= 90.0 and solidity >= 0.72 and aspect <= 5.0) or
-                        (min_dim <= 2.8 and aspect >= 2.5)
-                    ) and len(holes) == 0
+                    is_simple_rectangle = len(holes) == 0 and (
+                        (rectangularity >= 0.50 and solidity >= 0.72 and aspect <= 8.0) or
+                        (solidity >= 0.80 and aspect <= 8.0) or
+                        (area <= 350.0 and rectangularity >= 0.45 and solidity >= 0.66) or
+                        (min_dim <= 3.2 and aspect >= 2.0)
+                    )
 
                     if is_simple_rectangle:
                         poly = Polygon(np.intp(cv2.boxPoints(rect)))
                         if poly.is_valid and not poly.is_empty:
                             raw_polys.append((poly, angle))
                     else:
-                        # L-shaped, U-shaped, C-shaped courtyard regularizer
-                        poly = regularize_manhattan_contour(cnt, angle_deg=angle)
-                        if poly is None or not poly.is_valid or poly.is_empty:
-                            approx = cv2.approxPolyDP(cnt, 2.0, True).reshape(-1, 2)
-                            if len(approx) >= 4:
-                                poly = Polygon(approx)
-
-                        if poly and poly.is_valid and not poly.is_empty:
-                            for h_poly in holes:
-                                if h_poly.is_valid:
-                                    try:
-                                        poly = poly.difference(h_poly)
-                                    except Exception:
-                                        pass
-                            if isinstance(poly, Polygon) and not poly.is_empty:
-                                raw_polys.append((poly, angle))
-                            elif hasattr(poly, 'geoms'):
-                                for p in poly.geoms:
-                                    if isinstance(p, Polygon) and not p.is_empty:
-                                        raw_polys.append((p, angle))
+                        approx = cv2.approxPolyDP(cnt, 2.5, True).reshape(-1, 2)
+                        if len(approx) >= 3:
+                            clean_ext = despike_and_simplify_ring(approx, min_edge_len=3.5, spike_angle_deg=45.0)
+                            if len(clean_ext) >= 4:
+                                clean_ext = regularize_orthogonal_ring(clean_ext, dominant_angle_deg=angle, snap_threshold_deg=22.0)
+                                try:
+                                    poly = Polygon(shell=clean_ext, holes=holes if holes else None)
+                                    if not poly.is_valid:
+                                        poly = poly.buffer(0)
+                                    if poly.is_valid and not poly.is_empty:
+                                        for p in unpack_polygons(poly):
+                                            if p.area >= self.config.min_building_area_px:
+                                                raw_polys.append((p, angle))
+                                except Exception:
+                                    pass
 
         # Filter strictly within settlement boundaries if provided
         if settlement_boundaries and len(settlement_boundaries) > 0:
@@ -522,36 +713,30 @@ class BuildingExtractor:
                     scoped_polys.append((poly, ang))
             raw_polys = scoped_polys
 
-        # 3. Consolidate fragmented house pieces and despike polygons into clean blocks
+        # 3. Consolidate and regularize polygons
         valid_raw = [p for p, ang in raw_polys if p.is_valid and not p.is_empty]
-        if valid_raw:
-            try:
-                solid_raw = [p for p in valid_raw if len(p.interiors) == 0]
-                holed_raw = [p for p in valid_raw if len(p.interiors) > 0]
-                merged_list = list(holed_raw)
-
-                if solid_raw:
-                    buffered = [p.buffer(1.2, join_style=2) for p in solid_raw]
-                    merged_union = unary_union(buffered)
-                    unbuffered = merged_union.buffer(-1.2, join_style=2)
-                    if isinstance(unbuffered, Polygon):
-                        merged_list.append(unbuffered)
-                    elif isinstance(unbuffered, MultiPolygon):
-                        merged_list.extend(list(unbuffered.geoms))
-                if not merged_list:
-                    merged_list = valid_raw
-            except Exception:
-                merged_list = valid_raw
-        else:
-            merged_list = []
-
         clean_polys: List[Tuple[Polygon, float]] = []
-        for poly in merged_list:
+        allow_thin_walls = self.config.min_stroke_width_px <= 1.8
+        max_aspect = 35.0 if self.config.min_stroke_width_px <= 1.0 else getattr(self.config, "max_aspect_ratio", 5.5)
+
+        for poly in valid_raw:
             if not poly.is_valid or poly.is_empty or poly.area < self.config.min_building_area_px:
                 continue
             p_clean, ang = despike_and_regularize(poly, simplify_eps=self.config.simplify_tolerance)
-            if p_clean.is_valid and not p_clean.is_empty and p_clean.area >= self.config.min_building_area_px:
-                clean_polys.append((p_clean, ang))
+            for p_sub in unpack_polygons(p_clean):
+                if p_sub.area >= self.config.min_building_area_px:
+                    sub_coords = np.array(p_sub.exterior.coords)
+                    if len(sub_coords) >= 4:
+                        sub_rect = cv2.minAreaRect(sub_coords.astype(np.int32))
+                        (scx, scy), (srw, srh), _ = sub_rect
+                        s_min, s_max = min(srw, srh), max(srw, srh)
+                        s_aspect = s_max / (s_min + 1e-5)
+                        if s_aspect > max_aspect:
+                            continue
+                        min_w = self.config.min_stroke_width_px if allow_thin_walls else 2.5
+                        if s_min < min_w:
+                            continue
+                    clean_polys.append((p_sub, ang))
 
         # 4. Build features and GeoDataFrame
         features: List[BuildingFeature] = []
@@ -596,6 +781,30 @@ class BuildingExtractor:
                 for interior in poly.interiors:
                     hole_coords = np.array(interior.coords, dtype=np.int32)
                     cv2.fillPoly(final_mask, [hole_coords], 0)
+
+        if x_off > 0 or y_off > 0:
+            shifted_features = []
+            shifted_geoms = []
+            for f in features:
+                p_glob = translate(f.geometry, xoff=x_off, yoff=y_off)
+                minx, miny, maxx, maxy = p_glob.bounds
+                shifted_features.append(BuildingFeature(
+                    id=f.id,
+                    geometry=p_glob,
+                    area_px=f.area_px,
+                    perimeter_px=f.perimeter_px,
+                    compactness=f.compactness,
+                    orientation_deg=f.orientation_deg,
+                    centroid_x=float(p_glob.centroid.x),
+                    centroid_y=float(p_glob.centroid.y),
+                    bounding_box=[int(minx), int(miny), int(maxx - minx), int(maxy - miny)],
+                ))
+                shifted_geoms.append(p_glob)
+            features = shifted_features
+            geoms = shifted_geoms
+            for rec, geom in zip(records, geoms):
+                rec["centroid_x"] = round(geom.centroid.x, 2)
+                rec["centroid_y"] = round(geom.centroid.y, 2)
 
         gdf = gpd.GeoDataFrame(records, geometry=geoms, crs="EPSG:25832") if geoms else gpd.GeoDataFrame(geometry=[], crs="EPSG:25832")
 

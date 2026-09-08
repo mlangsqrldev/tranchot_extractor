@@ -8,6 +8,7 @@ Welcome to the internal technical documentation of the **Tranchot Extractor** pr
 1. [Historical Map Context: The Tranchot & von Müffling Series](#1-historical-map-context)
 2. [Software Architecture & Core Pipeline](#2-software-architecture--core-pipeline)
 3. [Building & Courtyard Extraction Algorithm (`BuildingExtractor`)](#3-building--courtyard-extraction-algorithm)
+   - 📖 *Ausführliche Dokumentation*: [Farbraumnormalisierung & Optische Dichte (Beer-Lambert)](FARBNORMALISIERUNG_UND_GEBAEUDEEXTRAKTION.md)
 4. [Competitive Texture-Aware Land-Use Engine (`LandUseExtractor` & `PipetteSampler`)](#4-competitive-texture-aware-land-use-engine)
 5. [Road Network & Linear Topology Vectorization (`RoadExtractor`)](#5-road-network--linear-topology-vectorization)
 6. [Toponym OCR & LOD Gazetteer Alignment (`ToponymExtractor`)](#6-toponym-ocr--lod-gazetteer-alignment)

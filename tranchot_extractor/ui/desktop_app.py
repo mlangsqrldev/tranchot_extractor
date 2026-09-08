@@ -39,10 +39,15 @@ from tranchot_extractor.preprocessing.color_enhancer import ColorEnhancer
 from tranchot_extractor.extractors.building_extractor import BuildingExtractor
 from tranchot_extractor.extractors.road_extractor import RoadExtractor
 from tranchot_extractor.extractors.text_extractor import TextExtractor
-from tranchot_extractor.extractors.landuse_extractor import LandUseExtractor
 from tranchot_extractor.extractors.pipette_sampler import PipetteSampler
+from tranchot_extractor.extractors.ilastik_soduco_extractor import IlastikSoducoLandUseExtractor
+from tranchot_extractor.extractors.sam_extractor import SAMExtractor
+
+
+
 from tranchot_extractor.geo.georeference import GeoReferenceHandler
 from tranchot_extractor.geo.spatial_gazetteer import SpatialGazetteer
+
 
 # Default to Light Mode as requested
 ctk.set_appearance_mode("Light")
@@ -205,6 +210,10 @@ class MapCanvas(tk.Canvas):
             self.redraw()
             return
 
+        if self.app.active_tool == "stamp":
+            self.app.handle_stamp_click(ix, iy)
+            return
+
         if self.app.active_tool == "pipette":
             self.app.handle_pipette_sample_at(ix, iy)
             return
@@ -303,7 +312,7 @@ class MapCanvas(tk.Canvas):
         self.cursor_canvas_y = event.y
         ix, iy = self.canvas_to_image_coords(event.x, event.y)
         self.app.update_coordinates_hud(ix, iy)
-        if self.app.active_tool in ("pattern_poly", "settlement_poly") and len(self.polygon_pts) > 0:
+        if (self.app.active_tool in ("pattern_poly", "settlement_poly") and len(self.polygon_pts) > 0) or self.app.active_tool == "stamp":
             self.redraw()
 
     def redraw(self):
@@ -333,14 +342,52 @@ class MapCanvas(tk.Canvas):
             dw = int((x1_img - x0_img) * self.scale)
             dh = int((y1_img - y0_img) * self.scale)
             if dw > 0 and dh > 0:
+                # High-quality alpha-blended overlay of extracted land-use layers
+                crop_np = np.array(crop)
+                overlay = crop_np.copy()
+                has_overlay = False
+
+                for l_key, show_var in [
+                    ("forest", self.app.show_forests_var),
+                    ("meadow", self.app.show_meadows_var),
+                    ("water", self.app.show_water_var),
+                    ("gravel", self.app.show_gravel_var),
+                    ("vineyard", self.app.show_vineyard_var),
+                    ("garden", self.app.show_garden_var),
+                ]:
+                    if show_var.get() and l_key in self.app.extracted_layers:
+                        polys = self.app.extracted_layers[l_key]
+                        if polys:
+                            hex_fill = LAYER_COLOR_SPECS.get(l_key, {}).get("fill", "#27ae60")
+                            r_c = int(hex_fill[1:3], 16)
+                            g_c = int(hex_fill[3:5], 16)
+                            b_c = int(hex_fill[5:7], 16)
+                            rgb_tuple = (r_c, g_c, b_c)
+
+                            for poly in polys:
+                                if not poly or poly.is_empty or not poly.exterior:
+                                    continue
+                                scaled_pts = []
+                                for px, py in poly.exterior.coords:
+                                    scaled_pts.append([int(round(px - x0_img)), int(round(py - y0_img))])
+                                if len(scaled_pts) >= 3:
+                                    cv2.fillPoly(overlay, [np.array(scaled_pts, dtype=np.int32)], rgb_tuple)
+                                    has_overlay = True
+
+                if has_overlay:
+                    cv2.addWeighted(overlay, 0.40, crop_np, 0.60, 0, dst=crop_np)
+                    crop_final = Image.fromarray(crop_np)
+                else:
+                    crop_final = crop
+
                 resample_filter = Image.Resampling.NEAREST if self.scale > 2.0 else Image.Resampling.BILINEAR
-                resized = crop.resize((dw, dh), resample_filter)
+                resized = crop_final.resize((dw, dh), resample_filter)
                 self.tk_image = ImageTk.PhotoImage(resized)
                 pos_x = x0_img * self.scale + self.pan_x
                 pos_y = y0_img * self.scale + self.pan_y
                 self.create_image(pos_x, pos_y, anchor="nw", image=self.tk_image)
 
-        # Draw Layers
+        # Draw crisp vector outlines on top
         if self.app.show_forests_var.get():
             self._draw_polygons(self.app.extracted_layers.get("forest", []), LAYER_COLOR_SPECS["forest"])
         if self.app.show_meadows_var.get():
@@ -364,17 +411,23 @@ class MapCanvas(tk.Canvas):
         # Draw Settlement Boundaries (Exclusion Zones)
         self._draw_settlement_boundaries()
 
+        # Draw Stamped Circular Nuances
+        self._draw_stamp_overlays()
+
         # Draw Few-Shot Exemplar Training Polygons
         self._draw_exemplar_polygons()
 
         # Draw Active Polygon In-Progress
         self._draw_active_polygon()
 
+        # Draw Live Stamp Cursor
+        self._draw_stamp_cursor()
+
         # Temporary road snapping point
         if self.app.road_start_pt is not None:
             cx, cy = self.image_to_canvas_coords(*self.app.road_start_pt)
-            self.create_oval(cx - 6, cy - 6, cx + 6, cy + 6, fill="#e74c3c", outline="#ffffff", width=2)
-            self.create_text(cx + 10, cy, text="Startpunkt", fill="#e74c3c", font=("Segoe UI", 10, "bold"), anchor="w")
+            self.create_oval(cx - 7, cy - 7, cx + 7, cy + 7, fill="#e74c3c", outline="#ffffff", width=2.5)
+            self.create_text(cx + 12, cy, text="Startpunkt", fill="#e74c3c", font=("Segoe UI", 10, "bold"), anchor="w")
 
         # Interactive Drag Box
         if self.is_dragging_box:
@@ -393,8 +446,8 @@ class MapCanvas(tk.Canvas):
                 box_color = "#00cec9"
                 box_tag = "🏷️ Toponym ROI-Box"
 
-            self.create_rectangle(bx0, by0, bx1, by1, outline=box_color, width=2, dash=(4, 2))
-            self.create_text(bx0 + 6, by0 + 12, text=box_tag, fill=box_color, font=("Segoe UI", 10, "bold"), anchor="w")
+            self.create_rectangle(bx0, by0, bx1, by1, outline=box_color, width=3, dash=(6, 3))
+            self.create_text(bx0 + 8, by0 + 14, text=box_tag, fill=box_color, font=("Segoe UI", 11, "bold"), anchor="w")
 
     def _draw_settlement_boundaries(self):
         if self.app.settlement_records:
@@ -409,18 +462,17 @@ class MapCanvas(tk.Canvas):
                 canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
                 flat_pts = [c for pt in canvas_pts for c in pt]
                 if len(flat_pts) >= 6:
-                    self.create_polygon(*flat_pts, fill="#8e44ad", outline="#8e44ad", width=3, dash=(6, 3), stipple="gray25")
+                    self.create_polygon(*flat_pts, fill="", outline="#8e44ad", width=3.5, dash=(8, 4))
 
                 # Central centroid marker & label
                 cx = rec.get("centroid_x", poly.centroid.x)
                 cy = rec.get("centroid_y", poly.centroid.y)
                 ccx, ccy = self.image_to_canvas_coords(cx, cy)
 
-                # Draw town pin marker
-                r = 6
-                self.create_oval(ccx - r, ccy - r, ccx + r, ccy + r, fill="#e74c3c", outline="#ffffff", width=2)
+                r = 7
+                self.create_oval(ccx - r, ccy - r, ccx + r, ccy + r, fill="#e74c3c", outline="#ffffff", width=2.5)
                 self.create_oval(ccx - 2, ccy - 2, ccx + 2, ccy + 2, fill="#ffffff", outline="#ffffff", width=1)
-                self.create_text(ccx + 10, ccy, text=f"📍 {label_txt}", fill="#8e44ad", font=("Segoe UI", 11, "bold"), anchor="w")
+                self.create_text(ccx + 12, ccy, text=f"📍 {label_txt}", fill="#8e44ad", font=("Segoe UI", 11, "bold"), anchor="w")
         else:
             for idx, poly in enumerate(self.app.settlement_boundaries, 1):
                 if not poly or poly.is_empty or not poly.exterior:
@@ -428,9 +480,44 @@ class MapCanvas(tk.Canvas):
                 canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
                 flat_pts = [c for pt in canvas_pts for c in pt]
                 if len(flat_pts) >= 6:
-                    self.create_polygon(*flat_pts, fill="#8e44ad", outline="#8e44ad", width=3, dash=(6, 3), stipple="gray25")
+                    self.create_polygon(*flat_pts, fill="", outline="#8e44ad", width=3.5, dash=(8, 4))
                     ccx, ccy = self.image_to_canvas_coords(poly.centroid.x, poly.centroid.y)
                     self.create_text(ccx, ccy, text=f"🏘️ Siedlung #{idx}", fill="#8e44ad", font=("Segoe UI", 12, "bold"))
+
+    def _draw_stamp_overlays(self):
+        for cid, sample in self.app.sampler.samples.items():
+            if not sample.active or not hasattr(sample, "stamps"):
+                continue
+            for s in sample.stamps:
+                ccx, ccy = self.image_to_canvas_coords(s.cx, s.cy)
+                r_canvas = max(3.0, s.radius * self.scale)
+                # Outer circle with dashed border
+                self.create_oval(
+                    ccx - r_canvas, ccy - r_canvas, ccx + r_canvas, ccy + r_canvas,
+                    outline=s.hex_color, width=2.5, dash=(4, 2)
+                )
+                # Central dot
+                self.create_oval(ccx - 4, ccy - 4, ccx + 4, ccy + 4, fill=s.hex_color, outline="#FFFFFF", width=1.5)
+                # Label tag with class name
+                c_name = LAYER_COLOR_SPECS.get(cid, {}).get("name", cid).split()[0]
+                lbl_str = f"⭘ {c_name} #{s.stamp_id}"
+                tag_w = max(24, len(lbl_str) * 4 + 6)
+                self.create_rectangle(ccx - tag_w, ccy - 20, ccx + tag_w, ccy - 6, fill="#1E293B", outline=s.hex_color, width=1.0)
+                self.create_text(ccx, ccy - 13, text=lbl_str, fill="#F8FAFC", font=("Segoe UI", 8, "bold"))
+
+    def _draw_stamp_cursor(self):
+        if self.app.active_tool == "stamp" and self.cursor_canvas_x is not None and self.cursor_canvas_y is not None:
+            cid = self.app.active_pipette_class
+            sample = self.app.sampler.get_sample(cid)
+            col = sample.hex_color if sample else "#27ae60"
+            r_img = self.app.stamp_radius_var.get() if hasattr(self.app, "stamp_radius_var") else 22
+            r_canvas = max(4.0, r_img * self.scale)
+            cx, cy = self.cursor_canvas_x, self.cursor_canvas_y
+            # Outer ring
+            self.create_oval(cx - r_canvas, cy - r_canvas, cx + r_canvas, cy + r_canvas, outline=col, width=2.0, dash=(4, 2))
+            # Center crosshair
+            self.create_line(cx - 6, cy, cx + 6, cy, fill=col, width=1.5)
+            self.create_line(cx, cy - 6, cx, cy + 6, fill=col, width=1.5)
 
     def _draw_exemplar_polygons(self):
         for cid, polys in self.app.exemplar_polygons.items():
@@ -441,39 +528,59 @@ class MapCanvas(tk.Canvas):
                 canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
                 flat_pts = [c for pt in canvas_pts for c in pt]
                 if len(flat_pts) >= 6:
-                    self.create_polygon(*flat_pts, fill=spec["fill"], outline="#f1c40f", width=2.5, dash=(4, 2), stipple="gray50")
+                    # Bold high-contrast stroke
+                    self.create_polygon(*flat_pts, fill="", outline="#F59E0B", width=3.5)
                     ccx, ccy = self.image_to_canvas_coords(poly.centroid.x, poly.centroid.y)
-                    self.create_text(ccx, ccy, text=f"📐 Muster #{p_idx}", fill="#f39c12", font=("Segoe UI", 10, "bold"))
+                    # Text banner pill
+                    label_str = f"📐 Muster #{p_idx} ({spec.get('name', cid).split()[0]})"
+                    self.create_rectangle(ccx - 45, ccy - 12, ccx + 45, ccy + 12, fill="#1E293B", outline="#F59E0B", width=1.5)
+                    self.create_text(ccx, ccy, text=label_str, fill="#FBBF24", font=("Segoe UI", 10, "bold"))
 
     def _draw_active_polygon(self):
         if not self.polygon_pts:
             return
         canvas_pts = [self.image_to_canvas_coords(px, py) for px, py in self.polygon_pts]
-        for i, (pcx, pcy) in enumerate(canvas_pts):
-            r = 5
-            col = "#2ecc71" if i == 0 else "#f39c12"
-            self.create_oval(pcx - r, pcy - r, pcx + r, pcy + r, fill=col, outline="#ffffff", width=1.5)
-            if i == 0 and len(canvas_pts) >= 3:
-                self.create_text(pcx + 8, pcy - 8, text="Start (Klick zum Schließen)", fill="#27ae60", font=("Segoe UI", 9, "bold"), anchor="w")
 
+        # Draw lines between placed points
         if len(canvas_pts) > 1:
             flat_pts = [c for pt in canvas_pts for c in pt]
-            self.create_line(*flat_pts, fill="#f39c12", width=2, dash=(4, 2))
+            self.create_line(*flat_pts, fill="#F59E0B", width=4.0, capstyle="round", joinstyle="round")
 
+        # Rubber-band line to cursor
         if self.cursor_canvas_x is not None and self.cursor_canvas_y is not None and len(canvas_pts) > 0:
             last_cx, last_cy = canvas_pts[-1]
-            self.create_line(last_cx, last_cy, self.cursor_canvas_x, self.cursor_canvas_y, fill="#e74c3c", width=2)
+            self.create_line(last_cx, last_cy, self.cursor_canvas_x, self.cursor_canvas_y, fill="#EF4444", width=3.5, dash=(4, 2))
+
+        # Draw prominent grab handle nodes
+        for i, (pcx, pcy) in enumerate(canvas_pts):
+            r = 7
+            col = "#10B981" if i == 0 else "#3B82F6"
+            # Outer dark border
+            self.create_oval(pcx - r - 1, pcy - r - 1, pcx + r + 1, pcy + r + 1, fill="#000000", outline="#000000", width=1)
+            # Inner glowing core
+            self.create_oval(pcx - r, pcy - r, pcx + r, pcy + r, fill=col, outline="#FFFFFF", width=2.0)
+            
+            if i == 0 and len(canvas_pts) >= 3:
+                # Banner for close node
+                self.create_rectangle(pcx + 10, pcy - 20, pcx + 160, pcy + 4, fill="#065F46", outline="#10B981", width=1.5)
+                self.create_text(pcx + 85, pcy - 8, text="Start: Klick zum Schließen", fill="#ECFDF5", font=("Segoe UI", 9, "bold"))
 
     def _draw_polygons(self, polygons: List[Polygon], spec: Dict[str, str]):
-        fill_col = spec["fill"]
-        stroke_col = spec["stroke"]
+        stroke_col = spec.get("stroke", "#2ecc71")
         for poly in polygons:
             if not poly or poly.is_empty or not poly.exterior:
                 continue
             canvas_pts = [self.image_to_canvas_coords(x, y) for x, y in poly.exterior.coords]
             flat_pts = [c for pt in canvas_pts for c in pt]
             if len(flat_pts) >= 6:
-                self.create_polygon(*flat_pts, fill=fill_col, outline=stroke_col, width=1.5, stipple="gray25")
+                self.create_polygon(*flat_pts, fill="", outline=stroke_col, width=2.5)
+
+            for interior in poly.interiors:
+                hole_pts = [self.image_to_canvas_coords(x, y) for x, y in interior.coords]
+                flat_hole = [c for pt in hole_pts for c in pt]
+                if len(flat_hole) >= 6:
+                    self.create_polygon(*flat_hole, fill="", outline=stroke_col, width=1.5, dash=(4, 2))
+
 
     def _draw_roads(self):
         for idx, line in enumerate(self.app.extracted_roads):
@@ -658,8 +765,9 @@ class SettlementDialog(ctk.CTkToplevel):
     def __init__(self, parent, default_name: str, default_id: str, lat: Optional[float], lon: Optional[float], callback):
         super().__init__(parent)
         self.title("🏘️ Siedlung benennen & GeoNames Verknüpfung")
-        self.geometry("520x480")
-        self.resizable(False, False)
+        self.geometry("560x540")
+        self.minsize(520, 480)
+        self.resizable(True, True)
         self.callback = callback
         self.lat = lat
         self.lon = lon
@@ -667,15 +775,35 @@ class SettlementDialog(ctk.CTkToplevel):
         self.transient(parent)
         self.grab_set()
 
-        # Header
+        # 1. Bottom Action Buttons (Packed FIRST at bottom so they are ALWAYS visible!)
+        btn_box = ctk.CTkFrame(self, fg_color="transparent")
+        btn_box.pack(side="bottom", fill="x", padx=20, pady=(10, 16))
+
+        btn_ok = ctk.CTkButton(
+            btn_box, text="💾 Speichern & Gebäude extrahieren (OK)",
+            command=self._on_ok,
+            fg_color="#27ae60", hover_color="#2ecc71",
+            height=38, font=ctk.CTkFont(size=13, weight="bold")
+        )
+        btn_ok.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        btn_cancel = ctk.CTkButton(
+            btn_box, text="Abbrechen",
+            command=self.destroy,
+            fg_color="#64748B", hover_color="#EF4444",
+            height=38, width=100, font=ctk.CTkFont(size=12)
+        )
+        btn_cancel.pack(side="right")
+
+        # 2. Header
         lbl_h = ctk.CTkLabel(self, text="🏘️ Siedlung benennen & GeoNames", font=ctk.CTkFont(size=16, weight="bold"))
-        lbl_h.pack(padx=20, pady=(15, 4))
+        lbl_h.pack(padx=20, pady=(14, 2))
 
         geo_txt = f"📍 Zentroid: {lat:.5f}°N, {lon:.5f}°E (WGS84)" if (lat and lon) else "📍 Zentroid-Punkt im Zentrum des Polygons erfasst"
         lbl_sub = ctk.CTkLabel(self, text=geo_txt, font=ctk.CTkFont(size=11), text_color="#3498db")
         lbl_sub.pack(padx=20, pady=(0, 8))
 
-        # Form Frame
+        # 3. Form Frame
         form_fr = ctk.CTkFrame(self, fg_color="transparent")
         form_fr.pack(fill="x", padx=20, pady=2)
 
@@ -689,7 +817,7 @@ class SettlementDialog(ctk.CTkToplevel):
         self.ent_id.insert(0, default_id)
         self.ent_id.pack(fill="x", pady=(0, 6))
 
-        # Search Action
+        # 4. Search Action
         search_fr = ctk.CTkFrame(self, fg_color="transparent")
         search_fr.pack(fill="x", padx=20, pady=2)
 
@@ -702,30 +830,10 @@ class SettlementDialog(ctk.CTkToplevel):
         )
         btn_search.pack(fill="x")
 
-        # Search Results Listbox Frame
-        self.res_frame = ctk.CTkScrollableFrame(self, height=130, fg_color=("#F1F5F9", "#1E222B"))
-        self.res_frame.pack(fill="both", expand=True, padx=20, pady=(6, 10))
+        # 5. Search Results Listbox Frame (Fills remaining middle space)
+        self.res_frame = ctk.CTkScrollableFrame(self, fg_color=("#F1F5F9", "#1E222B"))
+        self.res_frame.pack(fill="both", expand=True, padx=20, pady=(6, 8))
         self._populate_results(SpatialGazetteer.search_settlement(default_name, lat=self.lat, lon=self.lon))
-
-        # Bottom Buttons
-        btn_box = ctk.CTkFrame(self, fg_color="transparent")
-        btn_box.pack(fill="x", padx=20, pady=(0, 15))
-
-        btn_ok = ctk.CTkButton(
-            btn_box, text="💾 Speichern & Gebäude extrahieren (OK)",
-            command=self._on_ok,
-            fg_color="#27ae60", hover_color="#2ecc71",
-            height=36, font=ctk.CTkFont(size=12, weight="bold")
-        )
-        btn_ok.pack(side="left", fill="x", expand=True, padx=(0, 6))
-
-        btn_cancel = ctk.CTkButton(
-            btn_box, text="Abbrechen",
-            command=self.destroy,
-            fg_color="#64748B", hover_color="#EF4444",
-            height=36, width=100
-        )
-        btn_cancel.pack(side="right")
 
         self.bind("<Return>", lambda e: self._on_ok())
         self.bind("<Escape>", lambda e: self.destroy())
@@ -745,29 +853,32 @@ class SettlementDialog(ctk.CTkToplevel):
         for m in matches:
             name = m.get("name", "")
             gn_id = str(m.get("geonames_id", ""))
-            row = ctk.CTkFrame(self.res_frame, fg_color=("#FFFFFF", "#262A35"), height=30)
+            row = ctk.CTkFrame(self.res_frame, fg_color=("#FFFFFF", "#262A35"), height=32)
             row.pack(fill="x", pady=2, padx=4)
 
             lbl = ctk.CTkLabel(row, text=f"📍 {name}  (GeoNames ID: {gn_id})", font=ctk.CTkFont(size=11, weight="bold"), anchor="w")
             lbl.pack(side="left", padx=8)
 
             btn_sel = ctk.CTkButton(
-                row, text="Auswählen", width=80, height=22, font=ctk.CTkFont(size=10),
-                command=lambda n=name, i=gn_id: self._select_match(n, i)
+                row, text="Auswählen (OK)", width=110, height=24, font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color="#27ae60", hover_color="#2ecc71",
+                command=lambda n=name, i=gn_id: self._select_and_confirm(n, i)
             )
             btn_sel.pack(side="right", padx=6, pady=3)
 
-    def _select_match(self, name: str, gn_id: str):
+    def _select_and_confirm(self, name: str, gn_id: str):
         self.ent_name.delete(0, "end")
         self.ent_name.insert(0, name)
         self.ent_id.delete(0, "end")
         self.ent_id.insert(0, gn_id)
+        self._on_ok()
 
     def _on_ok(self):
         name = self.ent_name.get().strip() or "Siedlung"
         gn_id = self.ent_id.get().strip() or ""
         self.callback(name, gn_id)
         self.destroy()
+
 
 
 class TranchotDesktopApp(ctk.CTk):
@@ -794,9 +905,15 @@ class TranchotDesktopApp(ctk.CTk):
         self.geo_handler: Optional[GeoReferenceHandler] = None
 
         self.sampler = PipetteSampler()
+        self.ilastik_soduco = IlastikSoducoLandUseExtractor()
+        self._sam_extractor: Optional[SAMExtractor] = None
         self.active_pipette_class: str = "forest"
 
+
+
         self.extracted_buildings: List[Polygon] = []
+
+
         self.extracted_roads: List[LineString] = []
         self.extracted_toponyms: List[Dict[str, Any]] = []
         self.extracted_layers: Dict[str, List[Polygon]] = {
@@ -818,6 +935,7 @@ class TranchotDesktopApp(ctk.CTk):
 
         # Setup GUI layout
         self._setup_layout()
+
         self._load_default_sample()
 
         # Keyboard shortcuts
@@ -897,9 +1015,12 @@ class TranchotDesktopApp(ctk.CTk):
         card_tools.pack(fill="x", padx=10, pady=4)
 
         self._create_section_label(card_tools, "🛠️ 3. Werkzeuge")
-        self.tool_var = ctk.StringVar(value="pipette")
+        self.tool_var = ctk.StringVar(value="stamp")
 
-        r_pipette = ctk.CTkRadioButton(card_tools, text="🎨 Farb-Pipette (Klick zum Samplen)", variable=self.tool_var, value="pipette", command=self._on_tool_change)
+        r_stamp = ctk.CTkRadioButton(card_tools, text="🖌️ Runder Stempel (1-Klick Farbnuance)", variable=self.tool_var, value="stamp", command=self._on_tool_change)
+        r_stamp.pack(anchor="w", padx=12, pady=2)
+
+        r_pipette = ctk.CTkRadioButton(card_tools, text="🎨 Farb-Pipette (Punkt-Farbe)", variable=self.tool_var, value="pipette", command=self._on_tool_change)
         r_pipette.pack(anchor="w", padx=12, pady=2)
 
         r_road_snap = ctk.CTkRadioButton(card_tools, text="🛣️ Straße nachverfolgen (A ➔ B)", variable=self.tool_var, value="road_snap", command=self._on_tool_change)
@@ -1035,20 +1156,30 @@ class TranchotDesktopApp(ctk.CTk):
         card_enhance = ctk.CTkFrame(self.right_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
         card_enhance.pack(fill="x", padx=10, pady=4)
 
-        lbl_enhance_title = ctk.CTkLabel(card_enhance, text="✨ 0. Weißabgleich & Entgilbung", font=ctk.CTkFont(size=14, weight="bold"), text_color="#27ae60")
+        lbl_enhance_title = ctk.CTkLabel(card_enhance, text="✨ 0. Weißabgleich & Normierung", font=ctk.CTkFont(size=14, weight="bold"), text_color="#27ae60")
         lbl_enhance_title.pack(anchor="w", padx=12, pady=(10, 2))
 
         self.enhance_active_var = ctk.BooleanVar(value=True)
         cb_enhance = ctk.CTkCheckBox(
             card_enhance,
-            text="✨ Entgilbung & Farbverstärkung aktiv",
+            text="✨ Entgilbung & Weißabgleich aktiv",
             variable=self.enhance_active_var,
             command=self._apply_enhancement_settings,
             font=ctk.CTkFont(size=11, weight="bold")
         )
-        cb_enhance.pack(anchor="w", padx=12, pady=(2, 6))
+        cb_enhance.pack(anchor="w", padx=12, pady=(2, 3))
 
-        self.lbl_deyellow_header = ctk.CTkLabel(card_enhance, text="Entgilbung / Weißabgleich (85%):", font=ctk.CTkFont(size=11))
+        self.ink_blackening_var = ctk.BooleanVar(value=True)
+        cb_ink = ctk.CTkCheckBox(
+            card_enhance,
+            text="✒️ Schraffen & Gravuren tiefschwarz",
+            variable=self.ink_blackening_var,
+            command=self._apply_enhancement_settings,
+            font=ctk.CTkFont(size=11)
+        )
+        cb_ink.pack(anchor="w", padx=12, pady=(2, 6))
+
+        self.lbl_deyellow_header = ctk.CTkLabel(card_enhance, text="Entgilbung / Papier-Weiß (85%):", font=ctk.CTkFont(size=11))
         self.lbl_deyellow_header.pack(anchor="w", padx=12, pady=(2, 0))
 
         self.slider_deyellow = ctk.CTkSlider(card_enhance, from_=0.0, to=1.0, number_of_steps=20, command=self._on_deyellow_slider_moved)
@@ -1060,7 +1191,16 @@ class TranchotDesktopApp(ctk.CTk):
 
         self.slider_vibrance = ctk.CTkSlider(card_enhance, from_=1.0, to=3.0, number_of_steps=20, command=self._on_vibrance_slider_moved)
         self.slider_vibrance.set(1.85)
-        self.slider_vibrance.pack(fill="x", padx=12, pady=(2, 10))
+        self.slider_vibrance.pack(fill="x", padx=12, pady=2)
+
+        btn_max_norm = ctk.CTkButton(
+            card_enhance,
+            text="🪄 100% Papier-Weiß & Schraffen-Schwarz",
+            command=self._set_max_normalization,
+            fg_color="#8e44ad", hover_color="#9b59b6",
+            height=28, font=ctk.CTkFont(size=11, weight="bold")
+        )
+        btn_max_norm.pack(fill="x", padx=12, pady=(4, 8))
 
         # Section 1 Card: Pipette Calibration
         card_pipette = ctk.CTkFrame(self.right_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
@@ -1119,41 +1259,105 @@ class TranchotDesktopApp(ctk.CTk):
         self.slider_tol.set(8)
         self.slider_tol.pack(fill="x", padx=12, pady=2)
 
-        btn_pattern_poly = ctk.CTkButton(
+        # Stamp Tool & Radius Controls
+        self.stamp_radius_var = ctk.IntVar(value=22)
+
+        btn_stamp_tool = ctk.CTkButton(
             card_pipette,
-            text="📐 Muster-Polygon zeichnen (Few-Shot)",
-            command=lambda: self._set_active_tool("pattern_poly"),
+            text="🖌️ Runder Stempel (1-Klick Farbnuance)",
+            command=lambda: self._set_active_tool("stamp"),
             fg_color="#8e44ad", hover_color="#9b59b6",
-            height=34, font=ctk.CTkFont(size=12, weight="bold")
+            height=36, font=ctk.CTkFont(size=12, weight="bold")
         )
-        btn_pattern_poly.pack(fill="x", padx=12, pady=(6, 2))
+        btn_stamp_tool.pack(fill="x", padx=12, pady=(6, 2))
+
+        lbl_rad_frame = ctk.CTkFrame(card_pipette, fg_color="transparent")
+        lbl_rad_frame.pack(fill="x", padx=12, pady=(2, 0))
+        self.lbl_stamp_radius = ctk.CTkLabel(lbl_rad_frame, text="Stempel-Radius (r = 22 px):", font=ctk.CTkFont(size=11, weight="bold"), text_color=THEME_TEXT_MAIN)
+        self.lbl_stamp_radius.pack(side="left")
+
+        self.slider_stamp_radius = ctk.CTkSlider(card_pipette, from_=10, to=50, number_of_steps=40, command=self._on_stamp_radius_changed)
+        self.slider_stamp_radius.set(22)
+        self.slider_stamp_radius.pack(fill="x", padx=12, pady=2)
+
+        # Polygon Options (Subordinate)
+        poly_btn_frame = ctk.CTkFrame(card_pipette, fg_color="transparent")
+        poly_btn_frame.pack(fill="x", padx=12, pady=(2, 3))
+
+        btn_pattern_poly = ctk.CTkButton(
+            poly_btn_frame,
+            text="📐 Freihand-Polygon",
+            command=lambda: self._set_active_tool("pattern_poly"),
+            fg_color="#34495e", hover_color="#2c3e50",
+            height=28, font=ctk.CTkFont(size=11)
+        )
+        btn_pattern_poly.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        btn_undo_pattern = ctk.CTkButton(
+            poly_btn_frame,
+            text="↩️ Letztes löschen",
+            command=self._undo_last_pattern_polygon,
+            fg_color="#475569", hover_color="#64748B",
+            height=28, width=105, font=ctk.CTkFont(size=10, weight="bold")
+        )
+        btn_undo_pattern.pack(side="right")
+
+        # Stamped Nuances Frame (Chips table)
+        self.card_nuances = ctk.CTkFrame(card_pipette, fg_color=THEME_SWATCH_FRAME, corner_radius=6)
+        self.card_nuances.pack(fill="x", padx=12, pady=(3, 4))
+
+        nuance_header = ctk.CTkFrame(self.card_nuances, fg_color="transparent")
+        nuance_header.pack(fill="x", padx=6, pady=(4, 2))
+
+        lbl_nuance_title = ctk.CTkLabel(nuance_header, text="🎨 Gesampelte Nuancen dieser Klasse:", font=ctk.CTkFont(size=10, weight="bold"), text_color=THEME_TEXT_MAIN)
+        lbl_nuance_title.pack(side="left")
+
+        btn_clear_stamps = ctk.CTkButton(
+            nuance_header,
+            text="🗑️",
+            width=22,
+            height=18,
+            fg_color="transparent",
+            hover_color="#EF4444",
+            text_color=("#64748B", "#CBD5E1"),
+            font=ctk.CTkFont(size=10),
+            command=self._clear_active_class_stamps
+        )
+        btn_clear_stamps.pack(side="right")
+
+        self.stamp_chips_frame = ctk.CTkFrame(self.card_nuances, fg_color="transparent")
+        self.stamp_chips_frame.pack(fill="x", padx=6, pady=(0, 4))
+
+        # Calculation Buttons
+        btn_extract_competitive = ctk.CTkButton(
+            card_pipette,
+            text="⚡ Gelernte Flächen berechnen (Alle Klassen)",
+            command=self._run_extract_all_sampled_classes,
+            fg_color="#27ae60", hover_color="#2ecc71",
+            height=38, font=ctk.CTkFont(size=13, weight="bold")
+        )
+        btn_extract_competitive.pack(fill="x", padx=12, pady=(4, 3))
 
         btn_landuse_box = ctk.CTkButton(
             card_pipette,
-            text="📐 Flächen ROI-Box aufziehen (Testen)",
+            text="📐 Flächen ROI-Box aufziehen (Live-Test)",
             command=lambda: self._set_active_tool("landuse_box"),
-            fg_color="#27ae60", hover_color="#2ecc71",
+            fg_color="#16a085", hover_color="#1abc9c",
             height=30, font=ctk.CTkFont(size=11)
         )
         btn_landuse_box.pack(fill="x", padx=12, pady=2)
 
-        btn_extract_competitive = ctk.CTkButton(
-            card_pipette,
-            text="⚡ Gelernte Flächen berechnen (OK)",
-            command=self._run_extract_all_sampled_classes,
-            fg_color="#16a085", hover_color="#1abc9c",
-            height=34, font=ctk.CTkFont(size=12, weight="bold")
-        )
-        btn_extract_competitive.pack(fill="x", padx=12, pady=3)
-
         btn_extract_active = ctk.CTkButton(
             card_pipette,
-            text="🎯 Nur aktive Klasse berechnen (OK)",
+            text="🎯 Nur aktive Klasse berechnen",
             command=self._run_extract_active_sample,
             fg_color="#2980b9", hover_color="#3498db",
-            height=30, font=ctk.CTkFont(size=11)
+            height=28, font=ctk.CTkFont(size=11)
         )
-        btn_extract_active.pack(fill="x", padx=12, pady=(3, 8))
+        btn_extract_active.pack(fill="x", padx=12, pady=(2, 8))
+
+
+
 
         # Palette list card
         card_swatches = ctk.CTkFrame(self.right_sidebar, fg_color=THEME_CARD_FG, border_color=THEME_CARD_BORDER, border_width=1, corner_radius=8)
@@ -1289,6 +1493,17 @@ class TranchotDesktopApp(ctk.CTk):
         self.lbl_vibrance_header.configure(text=f"Farb-Leuchtkraft ({val:.2f}×):")
         self._apply_enhancement_settings()
 
+    def _set_max_normalization(self):
+        self.enhance_active_var.set(True)
+        self.slider_deyellow.set(1.0)
+        self.lbl_deyellow_header.configure(text="Entgilbung / Papier-Weiß (100%):")
+        self.slider_vibrance.set(1.75)
+        self.lbl_vibrance_header.configure(text="Farb-Leuchtkraft (1.75×):")
+        if hasattr(self, "ink_blackening_var"):
+            self.ink_blackening_var.set(True)
+        self._apply_enhancement_settings()
+        self.lbl_status.configure(text="🪄 Maximale Normierung aktiv: Pergament ist 100% Reinweiß, Schraffen tiefschwarz!")
+
     def _apply_enhancement_settings(self):
         if self.raw_np is None:
             return
@@ -1296,6 +1511,7 @@ class TranchotDesktopApp(ctk.CTk):
         if self.enhance_active_var.get():
             dey = float(self.slider_deyellow.get())
             vib = float(self.slider_vibrance.get())
+            ink_black = self.ink_blackening_var.get() if hasattr(self, "ink_blackening_var") else True
             paper_sample = self.sampler.samples.get("paper")
             paper_rgb = paper_sample.rgb if (paper_sample and paper_sample.active) else None
 
@@ -1304,11 +1520,12 @@ class TranchotDesktopApp(ctk.CTk):
                 paper_rgb=paper_rgb,
                 deyellow_strength=dey,
                 vibrance=vib,
+                ink_blackening=ink_black,
             )
             self.enhanced_pil = Image.fromarray(self.enhanced_np)
             self.current_np = self.enhanced_np
             self.current_pil = self.enhanced_pil
-            self.btn_toggle_view.configure(text="✨ Restauriert (Aktiv)", fg_color="#27ae60", hover_color="#2ecc71")
+            self.btn_toggle_view.configure(text="✨ Normiert (Aktiv)", fg_color="#27ae60", hover_color="#2ecc71")
         else:
             self.current_np = self.raw_np
             self.current_pil = self.raw_pil
@@ -1382,6 +1599,8 @@ class TranchotDesktopApp(ctk.CTk):
         if class_id in self.extracted_layers:
             self.extracted_layers[class_id].clear()
         self.sampler.reset_class(class_id)
+        if hasattr(self, "ilastik_soduco"):
+            self.ilastik_soduco.model = None
         if class_id in self.swatch_boxes:
             sample = self.sampler.get_sample(class_id)
             if sample:
@@ -1398,22 +1617,28 @@ class TranchotDesktopApp(ctk.CTk):
         for cid in list(self.extracted_layers.keys()):
             self.extracted_layers[cid].clear()
         self.sampler._init_defaults()
+        if hasattr(self, "ilastik_soduco"):
+            self.ilastik_soduco.model = None
         for cid, swatch in self.swatch_boxes.items():
             sample = self.sampler.get_sample(cid)
             if sample:
                 swatch.configure(fg_color=sample.hex_color)
         self._update_active_swatch_display()
+
         self._update_counts()
         self.canvas.redraw()
-        self.lbl_status.configure(text="🗑️ Alle Few-Shot Muster und extrahierten Flächen zurückgesetzt.")
+        self.lbl_status.configure(text="🗑️ Alle Muster und extrahierten Flächen zurückgesetzt.")
+
+
+
 
     def _activate_class_pipette(self, class_id: str, label: str):
         self.active_pipette_class = class_id
         self.pipette_dropdown.set(label)
-        self.tool_var.set("pipette")
-        self.active_tool = "pipette"
+        self.tool_var.set("stamp")
+        self.active_tool = "stamp"
         self._update_active_swatch_display()
-        self.lbl_status.configure(text=f"Pipette aktiviert für '{label}'. Klicke auf die Karte zum Samplen.")
+        self.lbl_status.configure(text=f"Stempel aktiviert für '{label}'. Klicke auf die Karte zum Erfassen von Nuancen.")
 
     def _on_pipette_class_selected(self, choice: str):
         mapping = {
@@ -1427,10 +1652,10 @@ class TranchotDesktopApp(ctk.CTk):
             "📜 Pergament / Hintergrund": "paper"
         }
         self.active_pipette_class = mapping.get(choice, "forest")
-        self.tool_var.set("pipette")
-        self.active_tool = "pipette"
+        self.tool_var.set("stamp")
+        self.active_tool = "stamp"
         self._update_active_swatch_display()
-        self.lbl_status.configure(text=f"Pipette aktiv für: {choice}. Klicke auf die Karte zum Samplen.")
+        self.lbl_status.configure(text=f"Stempel aktiv für: {choice}. Klicke auf die Karte zum Erfassen von Nuancen.")
 
     def _update_active_swatch_display(self):
         sample = self.sampler.samples.get(self.active_pipette_class)
@@ -1440,14 +1665,130 @@ class TranchotDesktopApp(ctk.CTk):
                 self.swatch_boxes[self.active_pipette_class].configure(fg_color=sample.hex_color)
             self.slider_tol.set(sample.tolerance)
             self.lbl_tol_header.configure(text=f"Toleranz / Farbabstand (ΔE = {int(sample.tolerance)}):")
-            status = "gesampelt" if sample.active else "Standard"
+            stamps_cnt = len(sample.stamps)
+            status = f"{stamps_cnt} Stempel-Nuancen" if stamps_cnt > 0 else ("gesampelt" if sample.active else "Standard")
             self.lbl_swatch_info.configure(text=f"Farbe: RGB({sample.rgb[0]},{sample.rgb[1]},{sample.rgb[2]}) ({status})\nKlicke Karte zum Samplen")
+        self._refresh_stamp_chips()
 
     def _on_tolerance_changed(self, val: float):
         sample = self.sampler.samples.get(self.active_pipette_class)
         if sample:
             sample.tolerance = int(val)
             self.lbl_tol_header.configure(text=f"Toleranz / Farbabstand (ΔE = {int(val)}):")
+
+    def _on_stamp_radius_changed(self, val: float):
+        r = int(val)
+        if hasattr(self, "stamp_radius_var"):
+            self.stamp_radius_var.set(r)
+        if hasattr(self, "lbl_stamp_radius"):
+            self.lbl_stamp_radius.configure(text=f"Stempel-Radius (r = {r} px):")
+        if self.active_tool == "stamp":
+            self.canvas.redraw()
+
+    def _refresh_stamp_chips(self):
+        if not hasattr(self, "stamp_chips_frame"):
+            return
+        for widget in self.stamp_chips_frame.winfo_children():
+            widget.destroy()
+
+        cid = self.active_pipette_class
+        stamps = self.sampler.get_stamps(cid)
+        if not stamps:
+            lbl_empty = ctk.CTkLabel(
+                self.stamp_chips_frame,
+                text="Noch keine Stempel gesetzt. Klicke 3–10 Stellen auf der Karte an.",
+                font=ctk.CTkFont(size=10),
+                text_color=THEME_TEXT_MUTED,
+                wraplength=290,
+                justify="left"
+            )
+            lbl_empty.pack(anchor="w", padx=4, pady=2)
+            return
+
+        # Show chips in horizontal wrap container
+        row_frame = ctk.CTkFrame(self.stamp_chips_frame, fg_color="transparent")
+        row_frame.pack(fill="x", pady=1)
+
+        for idx, s in enumerate(stamps):
+            chip = ctk.CTkFrame(row_frame, fg_color=("#E2E8F0", "#334155"), corner_radius=6, height=24)
+            chip.pack(side="left", padx=2, pady=2)
+
+            dot = ctk.CTkFrame(chip, fg_color=s.hex_color, width=12, height=12, corner_radius=6, border_width=1, border_color="#FFFFFF")
+            dot.pack_propagate(False)
+            dot.pack(side="left", padx=(4, 2), pady=2)
+
+            lbl = ctk.CTkLabel(chip, text=f"#{s.stamp_id}", font=ctk.CTkFont(size=10, weight="bold"), text_color=THEME_TEXT_MAIN)
+            lbl.pack(side="left", padx=1)
+
+            btn_del = ctk.CTkButton(
+                chip,
+                text="✕",
+                width=16,
+                height=16,
+                fg_color="transparent",
+                hover_color="#EF4444",
+                text_color=("#64748B", "#CBD5E1"),
+                font=ctk.CTkFont(size=9, weight="bold"),
+                command=lambda i=idx: self._remove_stamp_at_index(cid, i)
+            )
+            btn_del.pack(side="left", padx=(0, 2))
+
+    def _remove_stamp_at_index(self, cid: str, idx: int):
+        self.sampler.remove_stamp(cid, idx)
+        sample = self.sampler.get_sample(cid)
+        if sample and cid in self.swatch_boxes:
+            self.swatch_boxes[cid].configure(fg_color=sample.hex_color)
+        if self.active_pipette_class == cid:
+            self._update_active_swatch_display()
+        self._refresh_stamp_chips()
+        self.canvas.redraw()
+        label = LAYER_COLOR_SPECS.get(cid, {}).get("name", cid)
+        self.lbl_status.configure(text=f"🗑️ Stempel aus '{label}' entfernt.")
+
+    def _clear_active_class_stamps(self):
+        cid = self.active_pipette_class
+        self.sampler.clear_stamps(cid)
+        self.sampler.reset_class(cid)
+        if cid in self.exemplar_polygons:
+            self.exemplar_polygons[cid].clear()
+        sample = self.sampler.get_sample(cid)
+        if sample and cid in self.swatch_boxes:
+            self.swatch_boxes[cid].configure(fg_color=sample.hex_color)
+        self._update_active_swatch_display()
+        self._refresh_stamp_chips()
+        self.canvas.redraw()
+        label = LAYER_COLOR_SPECS.get(cid, {}).get("name", cid)
+        self.lbl_status.configure(text=f"🗑️ Alle Stempel & Muster für '{label}' geleert.")
+
+    def handle_stamp_click(self, cx: float, cy: float):
+        if self.current_np is None:
+            return
+        radius = int(self.stamp_radius_var.get()) if hasattr(self, "stamp_radius_var") else 22
+        entry = self.sampler.sample_from_stamp(
+            self.current_np,
+            self.active_pipette_class,
+            cx=cx,
+            cy=cy,
+            radius=radius
+        )
+        if entry:
+            self._update_active_swatch_display()
+            if self.active_pipette_class in self.swatch_boxes:
+                self.swatch_boxes[self.active_pipette_class].configure(fg_color=entry.hex_color)
+            self._refresh_stamp_chips()
+            label = LAYER_COLOR_SPECS.get(self.active_pipette_class, {}).get("name", self.active_pipette_class)
+            stamps_count = len(self.sampler.get_stamps(self.active_pipette_class))
+            total_stamps = sum(len(self.sampler.get_stamps(c)) for c in self.sampler.samples)
+            filtered_info = f"({entry.distilled_pixels}/{entry.raw_pixels} px Pigment | Schraffen/Pergament gefiltert)"
+            self.lbl_status.configure(
+                text=f"🖌️ Stempel #{entry.stamp_id} für '{label}' erfasst! {filtered_info} – {stamps_count} Nuancen aktiv ({total_stamps} gesamt)."
+            )
+            self.canvas.redraw()
+        else:
+            label = LAYER_COLOR_SPECS.get(self.active_pipette_class, {}).get("name", self.active_pipette_class)
+            self.lbl_status.configure(
+                text=f"⚠️ Kein Farbpigment für '{label}' im Klickbereich (z. B. auf leeres Papier oder Straße geklickt). Bitte klicke auf eine farbige Lavierung!"
+            )
 
     def handle_pipette_sample_at(self, ix: float, iy: float):
         if self.current_np is None:
@@ -1492,12 +1833,22 @@ class TranchotDesktopApp(ctk.CTk):
         label = sample.label if sample else class_id
         self.lbl_status.configure(text=f"✅ {count} Flächen für '{label}' erfolgreich extrahiert!")
 
+    def _get_sam_extractor(self) -> Optional[SAMExtractor]:
+        if self._sam_extractor is None:
+            try:
+                self._sam_extractor = SAMExtractor()
+            except Exception as e:
+                print(f"[DesktopApp] SAM could not be initialized: {e}")
+                self._sam_extractor = None
+        return self._sam_extractor
+
     def _run_extract_all_sampled_classes(self):
         if self.current_np is None:
             return
 
-        self.lbl_status.configure(text="Extrahiere alle kalibrierten Klassen kompetitiv...")
+        self.lbl_status.configure(text="Extrahiere alle Klassen mit Farb- & Textur-Pipette...")
         self.update_idletasks()
+
 
         threading.Thread(target=self._async_extract_all_classes, daemon=True).start()
 
@@ -1515,6 +1866,7 @@ class TranchotDesktopApp(ctk.CTk):
 
         crop = self.current_np[min_y:max_y, min_x:max_x]
         all_res = self.sampler.extract_competitive_polygons(crop)
+        mode_tag = "🌲 Farb- & Textur-Pipette"
 
         total_found = 0
         for cid, polys in all_res.items():
@@ -1524,24 +1876,46 @@ class TranchotDesktopApp(ctk.CTk):
 
         self._update_counts()
         self.canvas.redraw()
-        self.lbl_status.configure(text=f"🌲 Flächen ROI-Test: {total_found} Flächen (kompetitiv, 0 Überlappung) extrahiert.")
+        self.lbl_status.configure(text=f"{mode_tag} ROI-Test: {total_found} Flächen (kompetitiv, 0 Überlappung) extrahiert.")
 
     def _async_extract_all_classes(self):
         try:
+            t0 = time.time()
             total_added = 0
-            all_res = self.sampler.extract_competitive_polygons(self.current_np)
+            sampled_cids = [
+                cid for cid, s in self.sampler.samples.items()
+                if (hasattr(s, "stamps") and len(s.stamps) > 0) or len(self.exemplar_polygons.get(cid, [])) > 0
+            ]
+            all_res = self.sampler.extract_competitive_polygons(
+                self.current_np,
+                active_class_ids=sampled_cids if sampled_cids else None
+            )
+            engine_name = "🖌️ Farbnuancen-Stempel"
+
+            # Clear previous layers for all sampled classes
+            for cid in sampled_cids:
+                self.extracted_layers[cid] = []
+
             for cid, polys in all_res.items():
-                if polys:
-                    self.extracted_layers[cid] = polys
-                    total_added += len(polys)
-            self.after(0, lambda: self._on_all_classes_complete(total_added))
+                self.extracted_layers[cid] = polys
+                total_added += len(polys)
+
+            elapsed = time.time() - t0
+            self.after(0, lambda: self._on_all_classes_complete(total_added, engine_name, elapsed))
         except Exception as e:
             self.after(0, lambda: self._on_error(f"Fehler: {e}"))
 
-    def _on_all_classes_complete(self, total_count: int):
+
+
+    def _on_all_classes_complete(self, total_count: int, engine_name: str, elapsed: float):
         self._update_counts()
         self.canvas.redraw()
-        self.lbl_status.configure(text=f"Fertig: {total_count} Flächen über alle Klassen extrahiert (kompetitiv, 0 Überlappung)!")
+        self.lbl_status.configure(
+            text=f"✅ {engine_name} Fertig in {elapsed:.2f}s: {total_count} Flächen über alle Klassen extrahiert!"
+        )
+
+
+
 
     def _run_auto_landuse(self):
         if self.current_np is None:
@@ -1596,6 +1970,33 @@ class TranchotDesktopApp(ctk.CTk):
         self.tool_var.set(tool_name)
         self._on_tool_change()
 
+    def _undo_last_pattern_polygon(self):
+        cid = self.active_pipette_class
+        polys = self.exemplar_polygons.get(cid, [])
+        if not polys:
+            for c_key, p_list in self.exemplar_polygons.items():
+                if p_list:
+                    cid = c_key
+                    polys = p_list
+                    break
+        if polys:
+            polys.pop()
+            if polys and self.current_np is not None:
+                self.sampler.sample_from_polygons(self.current_np, cid, polys)
+            else:
+                self.sampler.reset_class(cid)
+            sample = self.sampler.get_sample(cid)
+            if sample and cid in self.swatch_boxes:
+                self.swatch_boxes[cid].configure(fg_color=sample.hex_color)
+            if self.active_pipette_class == cid:
+                self._update_active_swatch_display()
+            self._update_counts()
+            self.canvas.redraw()
+            label = LAYER_COLOR_SPECS.get(cid, {}).get("name", cid)
+            self.lbl_status.configure(text=f"↩️ Letztes Muster für '{label}' gelöscht ({len(polys)} verbleibend).")
+        else:
+            self.lbl_status.configure(text="ℹ️ Keine Muster vorhanden zum Rückgängigmachen.")
+
     def handle_pattern_polygon(self, polygon_pts: List[Tuple[float, float]]):
         if self.current_np is None or len(polygon_pts) < 3:
             return
@@ -1606,14 +2007,21 @@ class TranchotDesktopApp(ctk.CTk):
                 self.exemplar_polygons[self.active_pipette_class] = []
             self.exemplar_polygons[self.active_pipette_class].append(poly)
 
-        sample = self.sampler.sample_from_polygon(self.current_np, self.active_pipette_class, polygon_pts)
+        sample = self.sampler.sample_from_polygons(
+            self.current_np,
+            self.active_pipette_class,
+            self.exemplar_polygons.get(self.active_pipette_class, [poly])
+        )
+
         if sample:
             self._update_active_swatch_display()
+            if self.active_pipette_class in self.swatch_boxes:
+                self.swatch_boxes[self.active_pipette_class].configure(fg_color=sample.hex_color)
             label = sample.label
             count = len(self.exemplar_polygons.get(self.active_pipette_class, []))
             total_samples = sum(len(v) for v in self.exemplar_polygons.values())
             self.lbl_status.configure(
-                text=f"📐 Muster #{count} für '{label}' gespeichert ({total_samples} Muster gesamt)! Zeichne weitere Muster oder klicke '⚡ Gelernte Flächen berechnen (OK)'."
+                text=f"📐 Muster #{count} für '{label}' gespeichert ({total_samples} Muster gesamt | Pergament & Schraffen automatisch gefiltert)! Klicke '⚡ Gelernte Flächen berechnen'."
             )
         self.canvas.redraw()
 
@@ -1857,6 +2265,7 @@ class TranchotDesktopApp(ctk.CTk):
         self.active_tool = self.tool_var.get()
         self.road_start_pt = None
         names = {
+            "stamp": "🖌️ Runder Stempel (Klicke 5–10 repräsentative Stellen auf der Karte an)",
             "pipette": "🎨 Farb-Pipette (Klick zum Samplen)",
             "pattern_poly": "📐 Muster-Polygon (Eckpunkte klicken, Doppelklick oder Enter zum Abschließen)",
             "settlement_poly": "🏘️ Siedlungs-Grenze (Eckpunkte um das Dorf klicken, Doppelklick zum Abschließen)",
@@ -2130,6 +2539,45 @@ class TranchotDesktopApp(ctk.CTk):
                     self.lbl_status.configure(text=f"Fläche ({k}) gelöscht.")
                     return
 
+        # Check circular stamps (allows right-clicking directly on a stamp on the canvas)
+        for cid, sample in self.sampler.samples.items():
+            if hasattr(sample, "stamps"):
+                for idx, s in enumerate(sample.stamps):
+                    if np.hypot(s.cx - ix, s.cy - iy) <= (s.radius + 6.0):
+                        self.sampler.remove_stamp(cid, idx)
+                        sample = self.sampler.get_sample(cid)
+                        if sample and cid in self.swatch_boxes:
+                            self.swatch_boxes[cid].configure(fg_color=sample.hex_color)
+                        if self.active_pipette_class == cid:
+                            self._update_active_swatch_display()
+                            self._refresh_stamp_chips()
+                        self._update_counts()
+                        self.canvas.redraw()
+                        label = LAYER_COLOR_SPECS.get(cid, {}).get("name", cid)
+                        self.lbl_status.configure(text=f"🗑️ Stempel #{s.stamp_id} ({label}) gelöscht.")
+                        return
+
+        # Check exemplar / pattern polygons (allows right-clicking directly on Muster #2 etc.)
+        for cid, polys in self.exemplar_polygons.items():
+            for idx, p in enumerate(polys):
+                if p.contains(click_pt) or p.distance(click_pt) < 15.0 or np.hypot(p.centroid.x - ix, p.centroid.y - iy) < 30.0:
+                    del polys[idx]
+                    if polys and self.current_np is not None:
+                        self.sampler.sample_from_polygons(self.current_np, cid, polys)
+                    else:
+                        self.sampler.reset_class(cid)
+
+                    sample = self.sampler.get_sample(cid)
+                    if sample and cid in self.swatch_boxes:
+                        self.swatch_boxes[cid].configure(fg_color=sample.hex_color)
+                    if self.active_pipette_class == cid:
+                        self._update_active_swatch_display()
+                    self._update_counts()
+                    self.canvas.redraw()
+                    label = LAYER_COLOR_SPECS.get(cid, {}).get("name", cid)
+                    self.lbl_status.configure(text=f"🗑️ Muster #{idx + 1} ({label}) gelöscht.")
+                    return
+
     def _delete_selected(self):
         deleted = False
         if self.selected_toponym_idx is not None and 0 <= self.selected_toponym_idx < len(self.extracted_toponyms):
@@ -2158,13 +2606,26 @@ class TranchotDesktopApp(ctk.CTk):
         self.extracted_toponyms.clear()
         for k in self.extracted_layers:
             self.extracted_layers[k].clear()
+        for k in self.exemplar_polygons:
+            self.exemplar_polygons[k].clear()
+        self.settlement_boundaries.clear()
+        self.settlement_records.clear()
+        if hasattr(self, "ilastik_soduco"):
+            self.ilastik_soduco.model = None
+        if hasattr(self, "canvas") and hasattr(self.canvas, "polygon_pts"):
+            self.canvas.polygon_pts.clear()
+
+
+
         self.selected_building_idx = None
         self.selected_road_idx = None
         self.selected_toponym_idx = None
         self.road_start_pt = None
         self._update_counts()
-        self.canvas.redraw()
-        self.lbl_status.configure(text="Alle Ebenen geleert.")
+        if hasattr(self, "canvas"):
+            self.canvas.redraw()
+        self.lbl_status.configure(text="Alle Ebenen & Muster geleert.")
+
 
     def _update_counts(self):
         num_f = len(self.extracted_layers.get("forest", []))

@@ -144,6 +144,21 @@ class SpatialGazetteer:
 
         return results[:10]
 
+    @classmethod
+    def _infer_category(cls, name: str) -> str:
+        low = name.lower()
+        if any(term in low for term in ["berg", "kopf", "höhe", "stein", "fels", "wald", "forst", "busch"]):
+            return "hill_mountain"
+        if any(term in low for term in ["bach", "fluss", "rhein", "mosel", "see", "weiher", "teich", "graben"]):
+            return "water_river"
+        if any(term in low for term in ["weg", "straße", "str.", "gasse", "pfad", "chaussee", "allee"]):
+            return "road_label"
+        if any(term in low for term in ["mühle", "kreuz", "croix", "kapelle", "kirche", "hof", "schloss", "burg"]):
+            return "annotation"
+        return "settlement"
+
+
+
     # Extended dictionary of Rhineland settlements with verified GeoNames IDs and coordinates
     RHINELAND_GEONAMES_DB = {
         "leutesdorf": {"name": "Leutesdorf", "geonames_id": "2878413", "type": "PPL", "state": "Rheinland-Pfalz", "lat": 50.4522, "lon": 7.2894},

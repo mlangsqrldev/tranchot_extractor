@@ -7,6 +7,10 @@ from tranchot_extractor.extractors.boundary_extractor import BoundaryExtractor, 
 from tranchot_extractor.extractors.road_extractor import RoadExtractor, RoadExtractionResult
 from tranchot_extractor.extractors.text_extractor import TextExtractor, TextExtractionResult
 from tranchot_extractor.extractors.sam_extractor import SAMExtractor
+from tranchot_extractor.extractors.pipette_sampler import PipetteSampler, ColorSample
+from tranchot_extractor.extractors.landuse_extractor import LandUseExtractor
+from tranchot_extractor.extractors.random_forest_extractor import RandomForestLandUseExtractor
+from tranchot_extractor.extractors.ilastik_soduco_extractor import IlastikSoducoLandUseExtractor
 
 __all__ = [
     "BuildingExtractor",
@@ -18,4 +22,13 @@ __all__ = [
     "TextExtractor",
     "TextExtractionResult",
     "SAMExtractor",
+    "PipetteSampler",
+    "ColorSample",
+    "LandUseExtractor",
+    "RandomForestLandUseExtractor",
+    "IlastikSoducoLandUseExtractor",
 ]
+
+
+
+

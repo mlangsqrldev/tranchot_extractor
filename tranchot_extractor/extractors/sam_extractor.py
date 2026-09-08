@@ -165,13 +165,16 @@ class SAMExtractor:
 
         local_pts = [[p[0] - cx1, p[1] - cy1] for p in pts] if pts else None
         local_lbls = labels if labels else None
+        local_boxes = [[[float(bx1 - cx1), float(by1 - cy1), float(bx2 - cx1), float(by2 - cy1)]]] if bounding_box else None
 
-        inputs = processor(
-            pil_crop,
-            input_points=[local_pts] if local_pts else None,
-            input_labels=[local_lbls] if local_lbls else None,
-            return_tensors="pt"
-        ).to(self.device)
+        proc_kwargs = {"return_tensors": "pt"}
+        if local_pts:
+            proc_kwargs["input_points"] = [local_pts]
+            proc_kwargs["input_labels"] = [local_lbls]
+        if local_boxes:
+            proc_kwargs["input_boxes"] = local_boxes
+
+        inputs = processor(pil_crop, **proc_kwargs).to(self.device)
 
         with torch.no_grad():
             outputs = model(**inputs)
@@ -194,9 +197,11 @@ class SAMExtractor:
         g_c = crop_rgb[:, :, 1].astype(np.int16)
         b_c = crop_rgb[:, :, 2].astype(np.int16)
 
-        carmine_c = (hsv_c[:, :, 1] > 35) & (r_c - g_c > 12) & (r_c - b_c > 12) & (lab_c[:, :, 1] > 130)
+        carmine_c = (hsv_c[:, :, 1] > 20) & (r_c - g_c > 8) & (r_c - b_c > 8) & (lab_c[:, :, 1] > 128)
         carmine_c = cv2.morphologyEx(carmine_c.astype(np.uint8) * 255, cv2.MORPH_DILATE, np.ones((3, 3)))
-        pred_mask_crop = cv2.bitwise_and(pred_mask_crop, carmine_c)
+        refined = cv2.bitwise_and(pred_mask_crop, carmine_c)
+        if np.count_nonzero(refined) > 12:
+            pred_mask_crop = refined
 
         # Vectorize with courtyard wing & hole support
         crop_polys = self._mask_to_polygons(pred_mask_crop, orthogonalize=orthogonalize)

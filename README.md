@@ -106,7 +106,22 @@ pip install -e .
 
 ## 🚀 Usage
 
-### 🖥️ Desktop GUI (Recommended)
+### 🗺️ QGIS 3 Plugin (`HistMap Extractor`)
+Direct vectorization and live interactive drawing inside **QGIS 3.28+**:
+
+```bash
+# Automatic installation / live junction into active QGIS profile:
+python install_to_qgis.py
+```
+1. Restart or open QGIS 3.
+2. In QGIS menu: `Plugins` -> `Manage and Install Plugins...` -> `Installed` -> Check `HistMap Extractor`.
+3. Open the dock panel via toolbar icon `🗺️ HistMap Extractor`.
+4. Draw settlement polygons with `📐 Polygon einzeichnen`, adjust parameters live, and generate GIS vector layers with authentic historical symbology!
+5. For full developer details, see [tranchot_qgis_plugin/README.md](file:///c:/Users/langm/sciebo/BCDH_Projektbox/1_BCDH%20Intern/Scripts/Tranchot_Extractor/tranchot_extractor/tranchot_qgis_plugin/README.md).
+
+---
+
+### 🖥️ Desktop GUI (CustomTkinter)
 Start the modern CustomTkinter dark-mode desktop application:
 ```bash
 python gui.py
@@ -151,11 +166,21 @@ tranchot-extract toponyms --input Sample/Nickenich.tif --output output/toponyms.
 ```
 tranchot_extractor/
 ├── gui.py                              # Desktop Application Entry Point
+├── install_to_qgis.py                  # QGIS 3 Plugin Installer & Symlinker
 ├── setup.py                            # Package Setup & Dependencies
 ├── requirements.txt                    # Pip Dependencies
 ├── .gitignore                          # Clean Git Ignore Rules
 ├── README.md                           # Main Project Documentation
 ├── WIKI.md                             # Comprehensive Developer & Architecture Wiki
+│
+├── tranchot_qgis_plugin/               # QGIS 3 Native Plugin (HistMap Extractor)
+│   ├── __init__.py                     # Plugin Class Factory
+│   ├── plugin.py                       # Lifecycle, Toolbar & Menu Registration
+│   ├── dockwidget.py                   # Dockable UI Panel & Control Center
+│   ├── map_tools.py                    # Interactive Polygon ROI & Color Pipette
+│   ├── tasks.py                        # QgsTask Background Multithreading Workers
+│   ├── symbology-style.db              # Embedded SQLite QGIS Symbology Database
+│   └── README.md                       # QGIS Plugin Architecture Documentation
 │
 ├── tests/                              # Automated Unit & Regression Test Suite
 │   ├── test_building_extractor.py      # Building extraction, despiking & thin wall tests

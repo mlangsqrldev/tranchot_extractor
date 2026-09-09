@@ -1,12 +1,9 @@
 ﻿Siedlungstyp;URI;PrefLabel_DE;Kategorie;Description_EN
 Dorf;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_99977a17;Dorf;Siedlung;Village
 Stadt;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_298def13;Stadt (Siedlung);Siedlung;City / Town
-Stadtkern;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_3a469bf7;Stadtkern;Siedlung;Historical Town Core
-Vorstadt;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_fb2825f8;Vorstadt;Siedlung;Suburb / Outskirts
 Weiler;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_4f0b069b;Weiler;Siedlung;Hamlet
 Gehöft;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_a6f2f972;Hof (Landwirtschaft);Siedlung;Farmstead / Homestead
 Hofanlage;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_a6f2f972;Hof (Landwirtschaft);Siedlung;Courtyard Estate / Farmstead Complex
-Einzelhof;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_b36d4929;Einzelhof;Siedlung;Isolated Farmstead
 Siedlung;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_84a4e3a5;Siedlung;Siedlung;Settlement (General)
 Wüstung;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_b9e14c47;Wüstung;Siedlung;Deserted / Abandoned Settlement
 Kirche;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_88f23419;Kirchengebäude;Sakralbau;Church Building
@@ -22,7 +19,6 @@ Festes Haus;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_7c3af4a3;F
 Wasserburg;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_b6361a4f;Wasserburg;Wehrbau;Moated Castle
 Höhenburg;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_24cef94f;Höhenburg;Wehrbau;Hilltop Castle
 Niederungsburg;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_1d36cb04;Niederungsburg;Wehrbau;Lowland Castle
-Motte;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_a43e8236;Motte (Architektur);Wehrbau;Motte-and-bailey Castle
 Festung;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_2c698655;Festung;Wehrbau;Fortress / Citadel
 Schanze;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_785ad094;Schanze (Befestigungsanlage);Wehrbau;Redoubt / Entrenchment
 Vorburg;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_1c76a91c;Vorburg;Wehrbau;Outer Bailey / Vorburg
@@ -33,10 +29,6 @@ Toranlage;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_08229a3a;Tor
 Mühle;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_442f5ff5;Mühle (Baukomplex);Gewerbebau;Mill Complex
 Wassermühle;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_48b8182b;Wassermühle;Gewerbebau;Watermill
 Windmühle;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_f012594d;Windmühle;Gewerbebau;Windmill
-Ölmühle;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_2de138ed;Ölmühle;Gewerbebau;Oil Mill
-Sägemühle;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_93230348;Sägemühle;Gewerbebau;Sawmill
-Papiermühle;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_b914d092;Papiermühle;Gewerbebau;Paper Mill
-Walkmühle;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_beb61107;Walkmühle;Gewerbebau;Fulling Mill
 Mühlengraben;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_43415787;Mühlengraben;Wasserbau;Mill Race / Mill Canal
 Mühlenteich;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_be1ce7b0;Mühlenteich;Wasserbau;Mill Pond
 Straße;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_06678d7e;Straße;Infrastruktur;Road / Thoroughfare
@@ -50,4 +42,3 @@ Gasthof;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_1eb53716;Gasth
 Teich;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_b131d5fa;Teich;Wasserbau;Pond
 Weiher;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_c1393480;Weiher;Wasserbau;Pool / Pond
 Wassergraben;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_389fcb0f;Wassergraben;Wasserbau;Moat / Water Channel
-Schifffahrtskanal;http://vocabs.bcdh.uni-bonn.de/LVR_Fundansprachen/concept_70dd39f1;Schifffahrtskanal;Wasserbau;Navigation Canal

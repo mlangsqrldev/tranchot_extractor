@@ -102,7 +102,7 @@ def main():
     if platform.system() == "Windows":
         # Directory junction does not require Administrator privileges on Windows!
         cmd = f'cmd /c mklink /J "{target_plugin_link}" "{plugin_src}"'
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, errors="replace")
         if res.returncode == 0:
             print("✅ Directory Junction erfolgreich erstellt (Live-Verknüpfung aktiv).")
             created = True
@@ -137,13 +137,13 @@ def main():
         if qgis_python_bat:
             print(f"\n🔍 Prüfe QGIS Python-Umgebung ({qgis_python_bat})...")
             check_cmd = [qgis_python_bat, "-c", "import cv2; print('OK')"]
-            cv_check = subprocess.run(check_cmd, capture_output=True, text=True)
+            cv_check = subprocess.run(check_cmd, capture_output=True, text=True, errors="replace")
             if "OK" in cv_check.stdout:
                 print("✅ OpenCV ist bereits in QGIS verfügbar!")
             else:
                 print("[i] OpenCV fehlt noch im QGIS-Python. Installiere 'opencv-python'...")
                 install_cmd = [qgis_python_bat, "-m", "pip", "install", "--user", "--no-deps", "opencv-python"]
-                pip_res = subprocess.run(install_cmd, capture_output=True, text=True)
+                pip_res = subprocess.run(install_cmd, capture_output=True, text=True, errors="replace")
                 if pip_res.returncode == 0:
                     print("[+] Abhängigkeiten erfolgreich in QGIS-Benutzerumgebung installiert.")
                 else:

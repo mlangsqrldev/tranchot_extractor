@@ -7,7 +7,12 @@ import os
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 import cv2
-import torch
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    torch = None
+    HAS_TORCH = False
 from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import unary_union
 import geopandas as gpd

@@ -27,11 +27,12 @@ from tranchot_extractor.config import LandUseConfig
 
 
 @dataclass
+@dataclass
 class LandUseFeature:
     """Represents an extracted land-use polygon."""
     id: int
     geometry: Polygon
-    category: str  # 'forest', 'meadow', 'water'
+    category: str  # 'forest', 'meadow', 'water', 'vineyard', 'garden'
     area_px: float
 
 
@@ -42,6 +43,8 @@ class LandUseExtractionResult:
     forest_polygons: List[Polygon]
     meadow_polygons: List[Polygon]
     water_polygons: List[Polygon]
+    vineyard_polygons: List[Polygon]
+    garden_polygons: List[Polygon]
     gdf: gpd.GeoDataFrame
     execution_time_s: float
 
@@ -51,18 +54,27 @@ class LandUseExtractor:
     Extracts historical land-use categories:
     - Forest (Wald): Olive-green wash + engraved tree foliage crown textures
     - Meadow (Wiesen / Weiden): Alluvial cyan-green valley meadows and pastures
-    - Water (Flüsse / Bäche / Teiche): Linear stream channels, mill races, ponds, and rivers
+    - Water (Flüsse / Bäche / Teiche / Gräben): Linear streams, moats, mill races, ponds, rivers
+    - Vineyard / Arable (Weinberge / Ackerland): Warm ochre wash & slope hachures
+    - Gardens & Orchards (Gärten / Baumgärten): Soft green parcels within and around settlements
     """
 
     def __init__(self, config: Optional[LandUseConfig] = None):
         self.config = config or LandUseConfig()
 
-    def extract(self, image_rgb: np.ndarray) -> LandUseExtractionResult:
+    def extract(
+        self,
+        image_rgb: np.ndarray,
+        roi_boundaries: Optional[List[Polygon]] = None,
+        enabled_categories: Optional[List[str]] = None,
+    ) -> LandUseExtractionResult:
         """
-        Extracts land-use features with 5-Pillar stream vs. meadow separation.
+        Extracts land-use features with multi-cue separation and optional ROI clipping.
         """
         t0 = time.time()
         h, w = image_rgb.shape[:2]
+
+        from shapely.validation import make_valid
 
         # 1. Multi-scale Pyramidal Downsampling for high processing speed on large GeoTIFFs
         max_dim = max(h, w)
@@ -83,7 +95,7 @@ class LandUseExtractor:
         b = small[:, :, 2].astype(float)
 
         # Parchment background & roads (dry warm tones)
-        is_paper_or_road = (r - b > 24) | (r - g > 12) | (gray > 220)
+        is_paper_or_road = (r - b > 26) | (r - g > 15) | (gray > 225)
 
         # Text / black ink mask (labels like 'Moulin', 'Kretz', 'Plaidt')
         text_ink = (gray < 112) & (r < 118) & (b < 118)
@@ -96,8 +108,7 @@ class LandUseExtractor:
         # -------------------------------------------------------------
         # Phase 1: Forest Extraction (Wald)
         # -------------------------------------------------------------
-        # Olive-green wash + crown texture variance, excluding paper and roads
-        is_forest = (g > b + 12) & (r < 165) & (g < 170) & (local_var > 30) & (~is_paper_or_road)
+        is_forest = (g > b + 10) & (r < 165) & (g < 170) & (local_var > 25) & (~is_paper_or_road)
 
         k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
         k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
@@ -107,28 +118,22 @@ class LandUseExtractor:
         # -------------------------------------------------------------
         # Phase 2: Alluvial Valley Wash Extraction (Talraum-Lasur)
         # -------------------------------------------------------------
-        # Cyan-green watercolor wash shared by both meadows and streams
         is_valley = (g >= r - 6) & (b >= r - 26) & (r < 205) & (g > 130) & (b > 120) & (~is_paper_or_road) & (forest_clean == 0)
         valley_closed = cv2.morphologyEx(is_valley.astype(np.uint8) * 255, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13)))
         valley_closed[forest_clean > 0] = 0
 
-        # Filter valley to genuine continuous valley floors
         num_v, labels_v, stats_v, _ = cv2.connectedComponentsWithStats(valley_closed)
         clean_valley = np.zeros_like(valley_closed)
         for i in range(1, num_v):
-            if stats_v[i, cv2.CC_STAT_AREA] >= 400:
+            if stats_v[i, cv2.CC_STAT_AREA] >= 300:
                 clean_valley[labels_v == i] = 255
 
         # -------------------------------------------------------------
-        # Phase 3: Multi-Cue Watercourse Extraction (Flüsse / Bäche / Teiche)
+        # Phase 3: Multi-Cue Watercourse Extraction (Flüsse / Bäche / Teiche / Gräben)
         # -------------------------------------------------------------
-        # A. Direct digital blue water detection (modern maps, lakes, synthetic tests)
-        direct_blue = (b > r + 25) & (b > g + 5)
+        direct_blue = (b > r + 20) & (b > g + 4)
+        valley_core = cv2.erode(clean_valley, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
 
-        # B. Valley core: exclude outer step boundary against parchment paper
-        valley_core = cv2.erode(clean_valley, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
-
-        # C. Historical stream tubular ridge response on natural inverted gray
         inv_gray = (255.0 - gray) / 255.0
         ridge_sigmas = getattr(self.config, "stream_ridge_sigmas", (1.0, 1.8, 2.8, 4.0))
         ridge = frangi(inv_gray, sigmas=list(ridge_sigmas), black_ridges=False)
@@ -140,15 +145,12 @@ class LandUseExtractor:
                 p98 = np.percentile(v_vals, 98.5)
                 ridge_norm = np.clip(ridge / (p98 + 1e-6), 0, 1.0)
                 blue_core = (b >= r - 12) & (g >= r - 4) & (gray < 175) & (valley_core > 0)
-                ridge_water = ((ridge_norm > 0.40) & (gray < 185) & (valley_core > 0)) | (blue_core & (ridge_norm > 0.20))
-                # Suppress roads, text ink, and forest
+                ridge_water = ((ridge_norm > 0.35) & (gray < 185) & (valley_core > 0)) | (blue_core & (ridge_norm > 0.18))
                 ridge_water &= (~is_paper_or_road) & (~text_dilated) & (forest_clean == 0)
                 stream_raw |= ridge_water
 
-        # Bridge stream segments across small dams, weirs, and bridges
         stream_bridged = cv2.morphologyEx(stream_raw.astype(np.uint8) * 255, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
 
-        # Connected component filtering: Streams are elongated tubular networks or ponds
         num_s, labels_s, stats_s, _ = cv2.connectedComponentsWithStats(stream_bridged)
         clean_stream = np.zeros_like(stream_bridged)
         for i in range(1, num_s):
@@ -158,13 +160,11 @@ class LandUseExtractor:
             span = max(bw, bh)
             min_dim = min(bw, bh)
             aspect = span / (min_dim + 1e-4)
-            # Elongated streams OR continuous network length OR direct blue ponds
-            if (span >= 35 and aspect >= 2.0) or (span >= 70) or (area >= 40 and np.any(direct_blue[labels_s == i])):
+            if (span >= 25 and aspect >= 1.8) or (span >= 50) or (area >= 30 and np.any(direct_blue[labels_s == i])):
                 clean_stream[labels_s == i] = 255
 
         # -------------------------------------------------------------
         # Phase 4: Topological Subtraction for Meadows (Wiesen / Weiden)
-        # Meadow = Valley Wash minus Buffered Stream Network
         # -------------------------------------------------------------
         buf_radius = getattr(self.config, "stream_dilation_buffer_px", 4)
         k_buf = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * buf_radius + 1, 2 * buf_radius + 1))
@@ -175,54 +175,107 @@ class LandUseExtractor:
         meadow_raw[text_dilated] = 0
         meadow_raw[forest_clean > 0] = 0
 
-        # Polish meadow parcels: remove thin slivers and bridge internal parcel lines
         meadow_clean = cv2.morphologyEx(meadow_raw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
         meadow_clean = cv2.morphologyEx(meadow_clean, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
 
         num_m, labels_m, stats_m, _ = cv2.connectedComponentsWithStats(meadow_clean)
         final_meadow = np.zeros_like(meadow_clean)
         for i in range(1, num_m):
-            if stats_m[i, cv2.CC_STAT_AREA] >= 150:
+            if stats_m[i, cv2.CC_STAT_AREA] >= 120:
                 final_meadow[labels_m == i] = 255
 
         # -------------------------------------------------------------
-        # Phase 5: Vectorization & Resolution Rescaling
+        # Phase 5: Gardens & Orchards (Gärten / Nutzgärten)
+        # -------------------------------------------------------------
+        is_garden = (g > r - 2) & (g > b + 5) & (r > 130) & (r < 210) & (g > 140) & (forest_clean == 0) & (final_meadow == 0) & (clean_stream == 0) & (~is_paper_or_road)
+        garden_clean = cv2.morphologyEx(is_garden.astype(np.uint8) * 255, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (4, 4)))
+        garden_clean = cv2.morphologyEx(garden_clean, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (6, 6)))
+
+        num_g, labels_g, stats_g, _ = cv2.connectedComponentsWithStats(garden_clean)
+        final_garden = np.zeros_like(garden_clean)
+        for i in range(1, num_g):
+            if stats_g[i, cv2.CC_STAT_AREA] >= 80:
+                final_garden[labels_g == i] = 255
+
+        # -------------------------------------------------------------
+        # Phase 6: Vineyards & Arable Land (Weinberge / Ackerparzellen)
+        # -------------------------------------------------------------
+        is_vineyard = (r > g + 8) & (r > b + 22) & (r > 145) & (r < 235) & (g > 110) & (g < 195) & (forest_clean == 0) & (clean_stream == 0) & (final_meadow == 0)
+        vineyard_clean = cv2.morphologyEx(is_vineyard.astype(np.uint8) * 255, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+        vineyard_clean = cv2.morphologyEx(vineyard_clean, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+
+        num_vy, labels_vy, stats_vy, _ = cv2.connectedComponentsWithStats(vineyard_clean)
+        final_vineyard = np.zeros_like(vineyard_clean)
+        for i in range(1, num_vy):
+            if stats_vy[i, cv2.CC_STAT_AREA] >= 150:
+                final_vineyard[labels_vy == i] = 255
+
+        # -------------------------------------------------------------
+        # Phase 7: Vectorization & Resolution Rescaling
         # -------------------------------------------------------------
         def vectorize_mask(mask_u8: np.ndarray, min_area_full_px: float) -> List[Polygon]:
             cnts, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             polys = []
             for cnt in cnts:
                 if len(cnt) >= 3:
-                    approx = cv2.approxPolyDP(cnt, 1.5, True)
+                    approx = cv2.approxPolyDP(cnt, 1.2, True)
                     if len(approx) >= 3:
                         scaled_pts = [(float(p[0][0]) * inv_scale, float(p[0][1]) * inv_scale) for p in approx]
                         p_geom = Polygon(scaled_pts)
-                        if p_geom.is_valid and p_geom.area >= min_area_full_px:
-                            polys.append(p_geom.simplify(2.0, preserve_topology=True))
+                        if not p_geom.is_valid:
+                            p_geom = make_valid(p_geom)
+                        if p_geom is not None and not p_geom.is_empty:
+                            if isinstance(p_geom, Polygon) and p_geom.area >= min_area_full_px:
+                                polys.append(p_geom.simplify(1.5, preserve_topology=True))
+                            elif hasattr(p_geom, 'geoms'):
+                                for g in p_geom.geoms:
+                                    if isinstance(g, Polygon) and g.area >= min_area_full_px:
+                                        polys.append(g.simplify(1.5, preserve_topology=True))
             return polys
 
-        min_forest_area = getattr(self.config, "min_forest_area_px", 600.0)
-        min_meadow_area = getattr(self.config, "min_meadow_area_px", 250.0)
+        min_forest_area = getattr(self.config, "min_forest_area_px", 400.0)
+        min_meadow_area = getattr(self.config, "min_meadow_area_px", 200.0)
         min_water_area = getattr(self.config, "min_water_area_px", 40.0)
+        min_vineyard_area = getattr(self.config, "min_vineyard_area_px", 300.0)
+        min_garden_area = getattr(self.config, "min_garden_area_px", 150.0)
 
-        forest_polys = vectorize_mask(forest_clean, min_area_full_px=min_forest_area)
-        meadow_polys = vectorize_mask(final_meadow, min_area_full_px=min_meadow_area)
-        water_polys = vectorize_mask(clean_stream, min_area_full_px=min_water_area)
+        forest_polys = vectorize_mask(forest_clean, min_area_full_px=min_forest_area) if getattr(self.config, 'enable_forest', True) else []
+        meadow_polys = vectorize_mask(final_meadow, min_area_full_px=min_meadow_area) if getattr(self.config, 'enable_meadow', True) else []
+        water_polys = vectorize_mask(clean_stream, min_area_full_px=min_water_area) if getattr(self.config, 'enable_water', True) else []
+        vineyard_polys = vectorize_mask(final_vineyard, min_area_full_px=min_vineyard_area) if getattr(self.config, 'enable_vineyard', True) else []
+        garden_polys = vectorize_mask(final_garden, min_area_full_px=min_garden_area) if getattr(self.config, 'enable_garden', True) else []
+
+        # Filter categories if requested
+        if enabled_categories:
+            if "forest" not in enabled_categories: forest_polys = []
+            if "meadow" not in enabled_categories: meadow_polys = []
+            if "water" not in enabled_categories: water_polys = []
+            if "vineyard" not in enabled_categories: vineyard_polys = []
+            if "garden" not in enabled_categories: garden_polys = []
+
+        # Scope strictly within ROI polygons if provided
+        if roi_boundaries and len(roi_boundaries) > 0:
+            def scope_list(plist):
+                return [p for p in plist if any(rb.intersects(p) for rb in roi_boundaries)]
+            forest_polys = scope_list(forest_polys)
+            meadow_polys = scope_list(meadow_polys)
+            water_polys = scope_list(water_polys)
+            vineyard_polys = scope_list(vineyard_polys)
+            garden_polys = scope_list(garden_polys)
 
         features: List[LandUseFeature] = []
         feat_id = 1
 
-        for p in forest_polys:
-            features.append(LandUseFeature(id=feat_id, geometry=p, category="forest", area_px=round(p.area, 1)))
-            feat_id += 1
-
-        for p in meadow_polys:
-            features.append(LandUseFeature(id=feat_id, geometry=p, category="meadow", area_px=round(p.area, 1)))
-            feat_id += 1
-
-        for p in water_polys:
-            features.append(LandUseFeature(id=feat_id, geometry=p, category="water", area_px=round(p.area, 1)))
-            feat_id += 1
+        for cat, plist in [
+            ("forest", forest_polys),
+            ("meadow", meadow_polys),
+            ("water", water_polys),
+            ("garden", garden_polys),
+            ("vineyard", vineyard_polys),
+        ]:
+            for p in plist:
+                features.append(LandUseFeature(id=feat_id, geometry=p, category=cat, area_px=round(p.area, 1)))
+                feat_id += 1
 
         # Build GeoDataFrame
         records = []
@@ -236,7 +289,10 @@ class LandUseExtractor:
             })
             geoms.append(f.geometry)
 
-        gdf = gpd.GeoDataFrame(records, geometry=geoms, crs="EPSG:25832") if geoms else gpd.GeoDataFrame(geometry=[], crs="EPSG:25832")
+        try:
+            gdf = gpd.GeoDataFrame(records, geometry=geoms) if geoms else gpd.GeoDataFrame(geometry=[])
+        except Exception:
+            gdf = None
         dt = time.time() - t0
 
         return LandUseExtractionResult(
@@ -244,6 +300,8 @@ class LandUseExtractor:
             forest_polygons=forest_polys,
             meadow_polygons=meadow_polys,
             water_polygons=water_polys,
+            vineyard_polygons=vineyard_polys,
+            garden_polygons=garden_polys,
             gdf=gdf,
             execution_time_s=round(dt, 3),
         )

@@ -10,7 +10,11 @@ import cv2
 from shapely.geometry import Polygon, LineString, Point
 from shapely.affinity import translate
 import geopandas as gpd
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, *args, **kwargs):
+        return iterable
 
 try:
     import rasterio

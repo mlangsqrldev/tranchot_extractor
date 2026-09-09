@@ -15,7 +15,13 @@ import os
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 import cv2
-import torch
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    torch = None
+    HAS_TORCH = False
+
 from PIL import Image
 from shapely.geometry import Polygon, MultiPolygon
 from shapely.affinity import translate
@@ -48,7 +54,13 @@ class SAMExtractor:
     _processors = {}
 
     def __init__(self, backend: str = "meta_sam", device: Optional[str] = None, model_name: str = "facebook/sam-vit-base"):
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        if HAS_TORCH and torch is not None:
+            try:
+                self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+            except Exception:
+                self.device = "cpu"
+        else:
+            self.device = "cpu"
         self.backend = backend.lower()
         self.model_name = model_name
         self._active_backend = self._resolve_backend(self.backend)
@@ -65,7 +77,7 @@ class SAMExtractor:
         name = model_name or self.model_name
         key = f"trans_{name}"
         if key not in SAMExtractor._models:
-            if not HAS_TRANSFORMERS_SAM:
+            if not HAS_TRANSFORMERS_SAM or not HAS_TORCH or torch is None:
                 return None, None
             try:
                 print(f"[SAM] Loading Transformers SAM '{name}' on {self.device}...")
@@ -385,4 +397,7 @@ class SAMExtractor:
 
 
 # Global singleton instance
-sam_extractor = SAMExtractor()
+try:
+    sam_extractor = SAMExtractor()
+except Exception:
+    sam_extractor = None

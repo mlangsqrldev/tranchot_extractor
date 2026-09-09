@@ -4,7 +4,12 @@ Trains instance segmentation models on annotated historical map crops using PyTo
 """
 
 import os
-import torch
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    torch = None
+    HAS_TORCH = False
 from typing import Optional, Dict, Any
 
 try:

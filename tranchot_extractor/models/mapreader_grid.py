@@ -14,7 +14,11 @@ import numpy as np
 import cv2
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, *args, **kwargs):
+        return iterable
 
 try:
     import rasterio

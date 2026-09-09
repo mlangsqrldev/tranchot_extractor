@@ -168,5 +168,5 @@ class TextExtractor:
             features=[],
             mask=np.zeros((h, w), dtype=np.uint8),
             dilated_mask=np.zeros((h, w), dtype=np.uint8),
-            gdf=gpd.GeoDataFrame(geometry=[], crs="EPSG:25832"),
+            gdf=gpd.GeoDataFrame(geometry=[]),
         )

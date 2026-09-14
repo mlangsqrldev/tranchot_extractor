@@ -2278,6 +2278,8 @@ class TranchotDockWidget(QDockWidget):
         )
         self.lu_roi_info_lbl.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 10px;")
         self.btn_lu_roi.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
+        if hasattr(self, 'rb_lu_roi'):
+            self.rb_lu_roi.setChecked(True)
 
         # Display persistent ROI polygon on map canvas (emerald green dashed border, transparent interior)
         if not hasattr(self, 'lu_roi_rubber_band') or self.lu_roi_rubber_band is None:
@@ -2652,6 +2654,21 @@ class TranchotDockWidget(QDockWidget):
                 f"✓ Nuance from polygon captured for '{target_cid}' ({entry.hex_color}, {entry.distilled_pixels} px)! {class_stamps} nuances active ({total_stamps} total)."
             )
 
+            # Also adopt this drawn polygon as active Land Use ROI if not already set
+            self.last_sampled_polygon_geom = geom
+            if self.current_lu_roi is None or self.current_lu_roi.isEmpty():
+                self.current_lu_roi = geom.boundingBox()
+                self.current_lu_roi_geom = geom
+                ha = geom.area() / 10000.0
+                if hasattr(self, 'lu_roi_info_lbl'):
+                    self.lu_roi_info_lbl.setText(
+                        f"Land Use Area (from Polygon): Area ≈ {geom.area():.0f} m² ({ha:.2f} ha)"
+                    )
+                    self.lu_roi_info_lbl.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 10px;")
+                if hasattr(self, 'rb_lu_roi'):
+                    self.rb_lu_roi.setChecked(True)
+                self._cache_lu_roi_data()
+
             if hasattr(self, 'chk_lu_live_preview') and self.chk_lu_live_preview.isChecked():
                 self._trigger_lu_preview_update()
 
@@ -2745,6 +2762,14 @@ class TranchotDockWidget(QDockWidget):
             return
 
         if self.rb_lu_roi.isChecked():
+            if self.current_lu_roi is None or self.current_lu_roi.isEmpty():
+                if hasattr(self, 'last_sampled_polygon_geom') and self.last_sampled_polygon_geom is not None and not self.last_sampled_polygon_geom.isEmpty():
+                    self.current_lu_roi = self.last_sampled_polygon_geom.boundingBox()
+                    self.current_lu_roi_geom = self.last_sampled_polygon_geom
+                elif hasattr(self, 'current_roi') and self.current_roi is not None and not self.current_roi.isEmpty():
+                    self.current_lu_roi = self.current_roi
+                    self.current_lu_roi_geom = getattr(self, 'current_roi_geom', None)
+
             if self.current_lu_roi is None or self.current_lu_roi.isEmpty():
                 return
             if self.cached_lu_roi_rgb is None:
@@ -2925,16 +2950,37 @@ class TranchotDockWidget(QDockWidget):
             if self.current_lu_roi is not None and not self.current_lu_roi.isEmpty():
                 layer_roi = self._transform_canvas_to_layer_rect(self.current_lu_roi, layer)
                 layer_geom = self._transform_canvas_to_layer_geom(self.current_lu_roi_geom, layer) if hasattr(self, 'current_lu_roi_geom') and self.current_lu_roi_geom is not None else None
+            elif hasattr(self, 'last_sampled_polygon_geom') and self.last_sampled_polygon_geom is not None and not self.last_sampled_polygon_geom.isEmpty():
+                self.current_lu_roi = self.last_sampled_polygon_geom.boundingBox()
+                self.current_lu_roi_geom = self.last_sampled_polygon_geom
+                layer_roi = self._transform_canvas_to_layer_rect(self.current_lu_roi, layer)
+                layer_geom = self._transform_canvas_to_layer_geom(self.current_lu_roi_geom, layer)
             elif hasattr(self, 'current_roi') and self.current_roi is not None and not self.current_roi.isEmpty():
                 layer_roi = self._transform_canvas_to_layer_rect(self.current_roi, layer)
                 layer_geom = self._transform_canvas_to_layer_geom(self.current_roi_geom, layer) if hasattr(self, 'current_roi_geom') and self.current_roi_geom is not None else None
             else:
-                QMessageBox.information(
-                    self,
-                    "No Area Selected",
-                    "Please draw a polygon first with '📐 Draw Land Use Polygon' or select 'Full Map Sheet'."
-                )
-                return
+                # Offer friendly choice between current map canvas view or full sheet
+                box = QMessageBox(self)
+                box.setWindowTitle("No Area Polygon Set")
+                box.setText("No specific boundary polygon has been drawn yet.")
+                box.setInformativeText("Which area would you like to extract?")
+                btn_canvas = box.addButton("Current Map View Extent", QMessageBox.ActionRole)
+                btn_full = box.addButton("Full Map Sheet", QMessageBox.ActionRole)
+                btn_cancel = box.addButton(QMessageBox.Cancel)
+                box.exec_()
+
+                clicked = box.clickedButton()
+                if clicked == btn_canvas:
+                    canvas_ext = self.canvas.extent()
+                    layer_roi = self._transform_canvas_to_layer_rect(canvas_ext, layer)
+                    layer_geom = None
+                    self.current_lu_roi = canvas_ext
+                elif clicked == btn_full:
+                    self.rb_lu_sheet.setChecked(True)
+                    layer_roi = None
+                    layer_geom = None
+                else:
+                    return
         else:
             layer_roi = None
             layer_geom = None

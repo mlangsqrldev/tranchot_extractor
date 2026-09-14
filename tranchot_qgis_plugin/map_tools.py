@@ -134,3 +134,35 @@ class PipetteMapTool(QgsMapToolEmitPoint):
             self.point_sampled.emit(point)
             if self.on_sample_callback:
                 self.on_sample_callback(point)
+
+
+class GazetteerPickMapTool(QgsMapTool):
+    """
+    Interactive map tool allowing the user to click anywhere on the QGIS canvas
+    to select a historical place / gazetteer point directly from the map.
+    - Left-Click: Pick point at coordinate
+    - Right-Click or Escape: Cancel picking mode
+    """
+
+    point_picked = pyqtSignal(QgsPointXY)
+    canceled = pyqtSignal()
+
+    def __init__(self, canvas, on_pick_callback: Optional[Callable[[QgsPointXY], None]] = None):
+        super().__init__(canvas)
+        self.canvas = canvas
+        self.on_pick_callback = on_pick_callback
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def canvasPressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            pt = self.toMapCoordinates(event.pos())
+            self.point_picked.emit(pt)
+            if self.on_pick_callback:
+                self.on_pick_callback(pt)
+        elif event.button() == Qt.MouseButton.RightButton:
+            self.canceled.emit()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.canceled.emit()
+

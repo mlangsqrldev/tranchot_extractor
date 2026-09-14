@@ -91,3 +91,4 @@ scratch/
 *.palette.json
 tmp/
 temp/
+*.db

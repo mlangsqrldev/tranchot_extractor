@@ -6,6 +6,7 @@ Provides full parameter control, interactive ROI selection, and progress monitor
 from typing import Optional, List, Dict, Any, Tuple, Callable, Union
 import os
 import sys
+import shutil
 import tempfile
 import time
 
@@ -55,10 +56,18 @@ from qgis.core import (
     QgsSpatialIndex,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
-    QgsFeatureRequest
+    QgsFeatureRequest,
+    QgsMultiBandColorRenderer,
+    QgsPalLayerSettings,
+    QgsVectorLayerSimpleLabeling,
+    QgsTextFormat,
+    QgsTextBufferSettings,
+    QgsMarkerSymbol,
+    QgsDistanceArea,
+    QgsPointXY,
 )
 
-from .map_tools import PolygonRoiMapTool, RoiExtentMapTool, PipetteMapTool
+from .map_tools import PolygonRoiMapTool, RoiExtentMapTool, PipetteMapTool, GazetteerPickMapTool
 from .tasks import BuildingExtractionTask, LandUseExtractionTask, TextExtractionTask
 
 
@@ -263,15 +272,32 @@ class TranchotDockWidget(QDockWidget):
         self.roi_info_lbl.setStyleSheet("color: #888888; font-size: 10px;")
         roi_layout.addWidget(self.roi_info_lbl)
 
+        # Checkbox to toggle Gazetteer places on map
+        self.chk_show_gazetteer = QCheckBox("📍 Orte aus Gazetteer auf Karte anzeigen")
+        self.chk_show_gazetteer.setChecked(False)
+        self.chk_show_gazetteer.setToolTip("Zeigt alle historischen Orte, Dörfer und Landmarken aus dem GOV-Gazetteer mit Beschriftung auf der Karte an.")
+        self.chk_show_gazetteer.toggled.connect(self._toggle_gazetteer_map_layer)
+        roi_layout.addWidget(self.chk_show_gazetteer)
+
         # Gazetteer Match Section
         gaz_box = QHBoxLayout()
-        gaz_lbl = QLabel("Toponym Match:")
+        gaz_lbl = QLabel("Toponym / Ortsname:")
         self.gazetteer_combo = QComboBox()
-        self.gazetteer_combo.addItem("None")
-        self.gazetteer_combo.setToolTip("Select the settlement name for this polygon to write to the building features.")
+        self.gazetteer_combo.setEditable(True)
+        self.gazetteer_combo.addItem("None", {"name": None, "type": None})
+        self.gazetteer_combo.setToolTip("Wähle den Ortsnamen aus den Gazetteer-Treffern oder tippe einen Namen frei ein.")
         self.gazetteer_combo.currentTextChanged.connect(self._on_gazetteer_match_changed)
+
+        self.btn_pick_gazetteer = QPushButton("🎯 Auf Karte wählen")
+        self.btn_pick_gazetteer.setToolTip("Klicke direkt auf einen Gazetteer-Punkt oder ein Dorf auf der Karte, um den Ort auszuwählen.")
+        self.btn_pick_gazetteer.setStyleSheet(
+            "background-color: #e65100; color: white; font-weight: bold; padding: 5px 8px; border-radius: 4px;"
+        )
+        self.btn_pick_gazetteer.clicked.connect(self._activate_gazetteer_picker)
+
         gaz_box.addWidget(gaz_lbl)
-        gaz_box.addWidget(self.gazetteer_combo)
+        gaz_box.addWidget(self.gazetteer_combo, 1)
+        gaz_box.addWidget(self.btn_pick_gazetteer)
         roi_layout.addLayout(gaz_box)
         
         type_box = QHBoxLayout()
@@ -298,6 +324,15 @@ class TranchotDockWidget(QDockWidget):
         self.gazetteer_info_lbl = QLabel("Awaiting polygon...")
         self.gazetteer_info_lbl.setStyleSheet("color: #888888; font-size: 10px;")
         roi_layout.addWidget(self.gazetteer_info_lbl)
+
+        # Action button to permanently save village and buildings
+        self.btn_save_village = QPushButton("💾 Dorf & Gebäude speichern")
+        self.btn_save_village.setToolTip("Speichert das aktuelle Dorf (Ortslagen-Polygon) und alle erkannten Gebäude dauerhaft in die Ebenen, damit du das nächste Dorf erfassen kannst.")
+        self.btn_save_village.setStyleSheet(
+            "background-color: #1b5e20; color: white; font-weight: bold; padding: 7px; border-radius: 4px;"
+        )
+        self.btn_save_village.clicked.connect(lambda: self._save_current_village(silent=False))
+        roi_layout.addWidget(self.btn_save_village)
 
         # Checkbox for interactive live preview
         self.chk_live_preview = QCheckBox("⚡ Live Preview active (instant response on slider adjustments)")
@@ -677,9 +712,15 @@ class TranchotDockWidget(QDockWidget):
         """Initializes custom QGIS MapTools for canvas interaction."""
         self.roi_tool = PolygonRoiMapTool(self.canvas, on_polygon_callback=self._on_polygon_roi_selected)
         self.pipette_tool = PipetteMapTool(self.canvas, on_sample_callback=self._on_pipette_sampled)
+        self.gazetteer_pick_tool = GazetteerPickMapTool(self.canvas, on_pick_callback=self._on_gazetteer_point_picked)
+        self.gazetteer_pick_tool.canceled.connect(self._cancel_gazetteer_picker)
 
     def _activate_roi_tool(self):
         """Switches QGIS map tool to irregular polygon drawing mode."""
+        # Auto-commit previous village if it has features and an active polygon
+        if hasattr(self, 'current_preview_features') and self.current_preview_features and getattr(self, 'current_roi_geom', None) is not None:
+            self._save_current_village(silent=True)
+
         self.canvas.setMapTool(self.roi_tool)
         self.status_lbl.setText("Click points on map (Right-click / double-click to finish)...")
         self.btn_roi.setStyleSheet("background-color: #ff9800; color: black; font-weight: bold; padding: 6px; border-radius: 4px;")
@@ -731,7 +772,7 @@ class TranchotDockWidget(QDockWidget):
     def _update_gazetteer_matches(self, geom: QgsGeometry):
         self.gazetteer_combo.blockSignals(True)
         self.gazetteer_combo.clear()
-        self.gazetteer_combo.addItem("None")
+        self.gazetteer_combo.addItem("None", {"name": None, "type": None})
         
         try:
             if self.gazetteer_layer is None:
@@ -769,7 +810,7 @@ class TranchotDockWidget(QDockWidget):
                 is_fallback = True
                 geom_3857 = QgsGeometry(centroid_4326)
                 geom_3857.transform(QgsCoordinateTransform(crs_4326, crs_3857, xform_ctx))
-                buffer_3857 = geom_3857.buffer(2000, 8)
+                buffer_3857 = geom_3857.buffer(3500, 8)
                 buffer_4326 = QgsGeometry(buffer_3857)
                 buffer_4326.transform(QgsCoordinateTransform(crs_3857, crs_4326, xform_ctx))
 
@@ -781,20 +822,47 @@ class TranchotDockWidget(QDockWidget):
 
             if matches:
                 matches.sort(key=lambda f: f.geometry().distance(centroid_4326))
-                for i, f in enumerate(matches[:5]):
+                for i, f in enumerate(matches[:8]):
                     name = str(f["name"]) if f["name"] else "Unknown"
-                    self.gazetteer_combo.addItem(name)
+                    t_val = str(f["type_value"]) if f["type_value"] else ""
+                    dist_deg = f.geometry().distance(centroid_4326)
+                    dist_m = int(dist_deg * 111320.0)
+                    if dist_m < 80:
+                        dist_label = "in Ortslage"
+                    elif dist_m < 1000:
+                        dist_label = f"{dist_m}m"
+                    else:
+                        dist_label = f"{dist_m/1000:.1f}km"
+                    
+                    label = f"{name} ({t_val}, {dist_label})" if t_val else f"{name} ({dist_label})"
+                    self.gazetteer_combo.addItem(label, {"name": name, "type": t_val})
 
                 if is_fallback:
-                    self.gazetteer_info_lbl.setText(f"Found {min(5, len(matches))} nearby matches (2km fallback)")
+                    self.gazetteer_info_lbl.setText(f"📍 {min(8, len(matches))} Treffer in Umgebung (nächster: {matches[0]['name']})")
                 else:
-                    self.gazetteer_info_lbl.setText(f"Found {min(5, len(matches))} matches within polygon")
+                    self.gazetteer_info_lbl.setText(f"📍 {min(8, len(matches))} Treffer innerhalb der Ortslage")
                 
-                # Auto-select the best match
-                self.gazetteer_combo.setCurrentIndex(1)
-                self.current_gazetteer_match = self.gazetteer_combo.currentText()
+                # Auto-select best match (or keep previously selected match if present in candidates)
+                selected_idx = 1
+                if getattr(self, 'current_gazetteer_match', None):
+                    for idx in range(1, self.gazetteer_combo.count()):
+                        d = self.gazetteer_combo.itemData(idx)
+                        if d and isinstance(d, dict) and d.get("name") == self.current_gazetteer_match:
+                            selected_idx = idx
+                            break
+
+                self.gazetteer_combo.setCurrentIndex(selected_idx)
+                best_data = self.gazetteer_combo.itemData(selected_idx)
+                self.current_gazetteer_match = best_data["name"] if (best_data and isinstance(best_data, dict)) else matches[0]["name"]
+
+                best_type = best_data.get("type", "") if (best_data and isinstance(best_data, dict)) else ""
+                if best_type:
+                    for idx in range(self.type_combo.count()):
+                        if best_type.lower() in self.type_combo.itemText(idx).lower():
+                            self.type_combo.setCurrentIndex(idx)
+                            break
             else:
-                self.gazetteer_info_lbl.setText("No matches found nearby.")
+                self.gazetteer_info_lbl.setText("Keine Treffer in der Nähe (Name frei eintippbar).")
                 self.current_gazetteer_match = None
                 
         except Exception as e:
@@ -803,10 +871,16 @@ class TranchotDockWidget(QDockWidget):
             self.gazetteer_combo.blockSignals(False)
 
     def _on_gazetteer_match_changed(self, text):
-        if text == "None":
+        data = self.gazetteer_combo.currentData()
+        if data and isinstance(data, dict) and data.get("name"):
+            self.current_gazetteer_match = data["name"]
+        elif text == "None":
             self.current_gazetteer_match = None
         else:
-            self.current_gazetteer_match = text
+            if "(" in text:
+                self.current_gazetteer_match = text.split("(")[0].strip()
+            else:
+                self.current_gazetteer_match = text.strip()
             
         if hasattr(self, 'chk_live_preview') and self.chk_live_preview.isChecked():
             self._update_live_preview()
@@ -821,6 +895,394 @@ class TranchotDockWidget(QDockWidget):
             
         if hasattr(self, 'chk_live_preview') and self.chk_live_preview.isChecked():
             self._update_live_preview()
+
+    def _toggle_gazetteer_map_layer(self, checked: bool):
+        """Shows or hides the historical GOV gazetteer places directly on the map canvas."""
+        layer_name = "📍 Historische Orte (GOV Gazetteer)"
+        existing_layers = QgsProject.instance().mapLayersByName(layer_name)
+
+        if checked:
+            if existing_layers:
+                vl = existing_layers[0]
+                node = QgsProject.instance().layerTreeRoot().findLayer(vl.id())
+                if node:
+                    node.setItemVisibilityChecked(True)
+            else:
+                gaz_path = os.path.join(os.path.dirname(__file__), "resources", "gazeteer_gov.geojson")
+                if not os.path.exists(gaz_path):
+                    self.status_lbl.setText("Gazetteer file not found.")
+                    return
+                vl = QgsVectorLayer(gaz_path, layer_name, "ogr")
+                if not vl.isValid():
+                    self.status_lbl.setText("Could not load gazetteer vector layer.")
+                    return
+
+                # Style as crisp orange pin/dots
+                symbol = QgsMarkerSymbol.createSimple({
+                    'name': 'circle',
+                    'color': '230,81,0,255',
+                    'color_border': '255,255,255,255',
+                    'size': '2.6',
+                    'outline_width': '0.5'
+                })
+                vl.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+                # Add labels
+                tf = QgsTextFormat()
+                tf.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+                tf.setColor(QColor(33, 33, 33))
+                buf = QgsTextBufferSettings()
+                buf.setEnabled(True)
+                buf.setSize(1.5)
+                buf.setColor(QColor(255, 255, 255))
+                tf.setBuffer(buf)
+                lbl_settings = QgsPalLayerSettings()
+                lbl_settings.fieldName = "name"
+                lbl_settings.setFormat(tf)
+                vl.setLabeling(QgsVectorLayerSimpleLabeling(lbl_settings))
+                vl.setLabelsEnabled(True)
+
+                QgsProject.instance().addMapLayer(vl, False)
+                QgsProject.instance().layerTreeRoot().insertLayer(0, vl)
+
+            self.canvas.refresh()
+            self.status_lbl.setText("📍 Gazetteer-Orte auf Karte eingeblendet.")
+        else:
+            if existing_layers:
+                node = QgsProject.instance().layerTreeRoot().findLayer(existing_layers[0].id())
+                if node:
+                    node.setItemVisibilityChecked(False)
+            self.canvas.refresh()
+            self.status_lbl.setText("📍 Gazetteer-Orte ausgeblendet.")
+
+    def _activate_gazetteer_picker(self):
+        """Activates map tool to select a gazetteer place directly by clicking on the map canvas."""
+        if hasattr(self, 'gazetteer_pick_tool') and self.canvas.mapTool() == self.gazetteer_pick_tool:
+            self.canvas.unsetMapTool(self.gazetteer_pick_tool)
+            self._reset_pick_button()
+            self.status_lbl.setText("Ortsauswahl auf Karte abgebrochen.")
+            return
+
+        # Ensure gazetteer places are visible on map
+        if not self.chk_show_gazetteer.isChecked():
+            self.chk_show_gazetteer.setChecked(True)
+
+        if hasattr(self, 'gazetteer_pick_tool'):
+            self.canvas.setMapTool(self.gazetteer_pick_tool)
+            self.btn_pick_gazetteer.setStyleSheet(
+                "background-color: #ff9800; color: black; font-weight: bold; padding: 5px 8px; border-radius: 4px;"
+            )
+            self.btn_pick_gazetteer.setText("🎯 Klicke auf Ort...")
+            self.status_lbl.setText("📍 Klicke auf einen Punkt oder ein Dorf auf der Karte (Rechtsklick/Esc zum Abbrechen)...")
+
+    def _cancel_gazetteer_picker(self):
+        """Resets map tool when user cancels gazetteer picking."""
+        if hasattr(self, 'gazetteer_pick_tool') and self.canvas.mapTool() == self.gazetteer_pick_tool:
+            self.canvas.unsetMapTool(self.gazetteer_pick_tool)
+        self._reset_pick_button()
+        self.status_lbl.setText("Ortsauswahl auf Karte abgebrochen.")
+
+    def _reset_pick_button(self):
+        """Restores normal appearance of gazetteer pick button."""
+        if hasattr(self, 'btn_pick_gazetteer'):
+            self.btn_pick_gazetteer.setStyleSheet(
+                "background-color: #e65100; color: white; font-weight: bold; padding: 5px 8px; border-radius: 4px;"
+            )
+            self.btn_pick_gazetteer.setText("🎯 Auf Karte wählen")
+
+    def _on_gazetteer_point_picked(self, point: QgsPointXY):
+        """Handles map click when picking a place/settlement from the Gazetteer."""
+        try:
+            if self.gazetteer_layer is None or self.gazetteer_index is None:
+                gaz_path = os.path.join(os.path.dirname(__file__), "resources", "gazeteer_gov.geojson")
+                if os.path.exists(gaz_path):
+                    self.gazetteer_layer = QgsVectorLayer(gaz_path, "Gazetteer", "ogr")
+                    if self.gazetteer_layer.isValid():
+                        self.gazetteer_index = QgsSpatialIndex(self.gazetteer_layer.getFeatures())
+
+            if not self.gazetteer_layer or not self.gazetteer_index:
+                self.status_lbl.setText("Gazetteer-Daten konnten nicht geladen werden.")
+                return
+
+            crs_canvas = self.canvas.mapSettings().destinationCrs()
+            crs_4326 = QgsCoordinateReferenceSystem("EPSG:4326")
+            xform_ctx = QgsProject.instance().transformContext()
+            ct_to_4326 = QgsCoordinateTransform(crs_canvas, crs_4326, xform_ctx)
+            ct_to_canvas = QgsCoordinateTransform(crs_4326, crs_canvas, xform_ctx)
+
+            pt_4326 = ct_to_4326.transform(point)
+
+            # Query nearest candidates from spatial index
+            candidate_fids = self.gazetteer_index.nearestNeighbor(pt_4326, 10)
+            if not candidate_fids:
+                self.status_lbl.setText("Keine Gazetteer-Punkte in der Datenbank gefunden.")
+                return
+
+            da = QgsDistanceArea()
+            da.setSourceCrs(crs_4326, xform_ctx)
+            da.setEllipsoid("EPSG:7030")
+
+            candidates = []
+            for fid in candidate_fids:
+                f = self.gazetteer_layer.getFeature(fid)
+                if f.isValid() and f.hasGeometry():
+                    dist_m = da.measureLine(pt_4326, f.geometry().asPoint())
+                    candidates.append((f, dist_m))
+
+            if not candidates:
+                self.status_lbl.setText("Keine gültigen Orte gefunden.")
+                return
+
+            candidates.sort(key=lambda item: item[1])
+            best_feat, best_dist = candidates[0]
+
+            best_name = str(best_feat["name"]) if best_feat["name"] else "Unknown"
+            best_type = str(best_feat["type_value"]) if best_feat["type_value"] else ""
+
+            # Populate combobox with nearby candidates
+            self.gazetteer_combo.blockSignals(True)
+            self.gazetteer_combo.clear()
+            self.gazetteer_combo.addItem("None", {"name": None, "type": None})
+
+            for f, d_m in candidates[:8]:
+                n = str(f["name"]) if f["name"] else "Unknown"
+                tv = str(f["type_value"]) if f["type_value"] else ""
+                if d_m < 80:
+                    dist_lbl = "am Klickpunkt"
+                elif d_m < 1000:
+                    dist_lbl = f"{int(d_m)}m"
+                else:
+                    dist_lbl = f"{d_m/1000:.1f}km"
+                lbl = f"{n} ({tv}, {dist_lbl})" if tv else f"{n} ({dist_lbl})"
+                self.gazetteer_combo.addItem(lbl, {"name": n, "type": tv})
+
+            self.gazetteer_combo.setCurrentIndex(1)
+            self.gazetteer_combo.blockSignals(False)
+
+            self.current_gazetteer_match = best_name
+
+            # Match settlement type in type_combo if available
+            if best_type:
+                for idx in range(self.type_combo.count()):
+                    if best_type.lower() in self.type_combo.itemText(idx).lower():
+                        self.type_combo.setCurrentIndex(idx)
+                        break
+
+            # Highlight selected point on map canvas with a glowing rubberband ring
+            try:
+                feat_pt_canvas = ct_to_canvas.transform(best_feat.geometry().asPoint())
+                mupp = self.canvas.mapUnitsPerPixel()
+                radius = max(mupp * 16.0, 10.0)
+                circle_geom = QgsGeometry.fromPointXY(feat_pt_canvas).buffer(radius, 24)
+
+                if not hasattr(self, 'gazetteer_pick_band') or self.gazetteer_pick_band is None:
+                    self.gazetteer_pick_band = QgsRubberBand(self.canvas, QgsWkbTypes.PolygonGeometry)
+                self.gazetteer_pick_band.setFillColor(QColor(255, 152, 0, 80))
+                self.gazetteer_pick_band.setStrokeColor(QColor(255, 87, 34, 255))
+                self.gazetteer_pick_band.setWidth(3)
+                self.gazetteer_pick_band.setToGeometry(circle_geom, None)
+                self.gazetteer_pick_band.show()
+                QTimer.singleShot(4000, lambda: self.gazetteer_pick_band.hide() if hasattr(self, 'gazetteer_pick_band') and self.gazetteer_pick_band else None)
+            except Exception:
+                pass
+
+            dist_str = f"{int(best_dist)}m" if best_dist < 1000 else f"{best_dist/1000:.1f}km"
+            info_text = f"🎯 Auf Karte gewählt: {best_name}"
+            if best_type:
+                info_text += f" ({best_type})"
+            info_text += f" [{dist_str}]"
+            self.gazetteer_info_lbl.setText(info_text)
+            self.gazetteer_info_lbl.setStyleSheet("color: #ff9800; font-weight: bold; font-size: 10px;")
+            self.status_lbl.setText(f"🎯 Ort '{best_name}' direkt über Karte ausgewählt.")
+
+            if hasattr(self, 'chk_live_preview') and self.chk_live_preview.isChecked():
+                self._update_live_preview()
+
+        except Exception as e:
+            self.status_lbl.setText(f"Fehler bei Ortsauswahl: {e}")
+        finally:
+            if hasattr(self, 'gazetteer_pick_tool') and self.canvas.mapTool() == self.gazetteer_pick_tool:
+                self.canvas.unsetMapTool(self.gazetteer_pick_tool)
+            self._reset_pick_button()
+
+    def _save_current_village(self, silent: bool = False):
+        """Saves current village boundary and detected buildings permanently into project layers."""
+        layer = self.layer_combo.currentLayer()
+        if not layer or not isinstance(layer, QgsRasterLayer):
+            if not silent:
+                QMessageBox.warning(self, "Keine Rasterkarte", "Bitte wähle zuerst eine historische Rasterkarte aus.")
+            return
+
+        if not hasattr(self, 'current_roi_geom') or self.current_roi_geom is None or self.current_roi_geom.isEmpty():
+            if not silent:
+                QMessageBox.information(self, "Keine Ortslage gezeichnet", "Bitte zeichne zuerst ein Polygon um das Dorf.")
+            return
+
+        features_to_save = getattr(self, 'current_preview_features', [])
+        if not features_to_save:
+            self._update_live_preview()
+            features_to_save = getattr(self, 'current_preview_features', [])
+
+        village_name = self.current_gazetteer_match or self.gazetteer_combo.currentText().strip()
+        if not village_name or village_name == "None":
+            village_name = "Unbenannte Ortslage"
+        elif "(" in village_name:
+            village_name = village_name.split("(")[0].strip()
+
+        s_type = getattr(self, 'current_type_match', None) or self.type_combo.currentText()
+        if s_type == "Default (Building/Courtyard)":
+            s_type = "Dorf"
+        s_uri = getattr(self, 'current_type_uri', None) or self.type_combo.currentData() or ""
+
+        crs_auth = layer.crs().authid() if (layer.crs() and layer.crs().isValid()) else "EPSG:25832"
+
+        # 1. Commit Buildings to permanent layer
+        bld_layer_name = f"🏛️ Buildings ({layer.name()})"
+        bld_layers = QgsProject.instance().mapLayersByName(bld_layer_name)
+        if bld_layers:
+            vl_bld = bld_layers[0]
+        else:
+            vl_bld = QgsVectorLayer(f"Polygon?crs={crs_auth}", bld_layer_name, "memory")
+            pr_bld = vl_bld.dataProvider()
+            fields = [
+                QgsField("id", QVariant.Int),
+                QgsField("type", QVariant.String),
+                QgsField("area_m2", QVariant.Double),
+                QgsField("perimeter_m", QVariant.Double),
+                QgsField("compactness", QVariant.Double),
+                QgsField("orientation", QVariant.Double),
+                QgsField("settlement", QVariant.String),
+                QgsField("type_uri", QVariant.String),
+            ]
+            pr_bld.addAttributes(fields)
+            vl_bld.updateFields()
+
+            symbol = QgsFillSymbol.createSimple({
+                'color': '205,55,55,215',
+                'color_border': '110,20,20,255',
+                'width_border': '0.35',
+                'style': 'solid',
+                'style_border': 'solid'
+            })
+            vl_bld.setRenderer(QgsSingleSymbolRenderer(symbol))
+            QgsProject.instance().addMapLayer(vl_bld, False)
+            QgsProject.instance().layerTreeRoot().insertLayer(0, vl_bld)
+
+        pr_bld = vl_bld.dataProvider()
+        new_bld_features = []
+        base_id = vl_bld.featureCount()
+        for idx, pf in enumerate(features_to_save):
+            f = QgsFeature(vl_bld.fields())
+            f.setGeometry(pf.geometry())
+            f.setAttribute("id", base_id + idx + 1)
+            f.setAttribute("type", pf.attribute("type") or "Building")
+            f.setAttribute("area_m2", pf.attribute("area_m2"))
+            f.setAttribute("perimeter_m", pf.attribute("perimeter_m"))
+            f.setAttribute("compactness", pf.attribute("compactness"))
+            f.setAttribute("orientation", pf.attribute("orientation"))
+            f.setAttribute("settlement", village_name)
+            f.setAttribute("type_uri", s_uri)
+            new_bld_features.append(f)
+
+        if new_bld_features:
+            pr_bld.addFeatures(new_bld_features)
+            vl_bld.updateExtents()
+            vl_bld.triggerRepaint()
+
+        # 2. Commit Settlement Boundary Polygon to permanent layer
+        settlement_layer_name = f"🏘️ Ortslagen ({layer.name()})"
+        settlement_layers = QgsProject.instance().mapLayersByName(settlement_layer_name)
+        if settlement_layers:
+            vl_settlement = settlement_layers[0]
+        else:
+            vl_settlement = QgsVectorLayer(f"Polygon?crs={crs_auth}", settlement_layer_name, "memory")
+            pr_set = vl_settlement.dataProvider()
+            fields = [
+                QgsField("id", QVariant.Int),
+                QgsField("name", QVariant.String),
+                QgsField("type", QVariant.String),
+                QgsField("type_uri", QVariant.String),
+                QgsField("building_count", QVariant.Int),
+                QgsField("area_m2", QVariant.Double),
+                QgsField("area_ha", QVariant.Double),
+                QgsField("sheet", QVariant.String),
+            ]
+            pr_set.addAttributes(fields)
+            vl_settlement.updateFields()
+
+            symbol = QgsFillSymbol.createSimple({
+                'color': '123,31,162,25',
+                'color_border': '123,31,162,240',
+                'width_border': '0.6',
+                'style': 'solid',
+                'style_border': 'dash'
+            })
+            vl_settlement.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+            tf = QgsTextFormat()
+            tf.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+            tf.setColor(QColor(106, 27, 154))
+            buf = QgsTextBufferSettings()
+            buf.setEnabled(True)
+            buf.setSize(1.4)
+            buf.setColor(QColor(255, 255, 255))
+            tf.setBuffer(buf)
+            lbl_settings = QgsPalLayerSettings()
+            lbl_settings.fieldName = "name"
+            lbl_settings.setFormat(tf)
+            vl_settlement.setLabeling(QgsVectorLayerSimpleLabeling(lbl_settings))
+            vl_settlement.setLabelsEnabled(True)
+
+            QgsProject.instance().addMapLayer(vl_settlement, False)
+            root = QgsProject.instance().layerTreeRoot()
+            bld_node = root.findLayer(vl_bld.id())
+            if bld_node:
+                idx = root.children().index(bld_node)
+                root.insertLayer(idx + 1, vl_settlement)
+            else:
+                root.insertLayer(0, vl_settlement)
+
+        layer_geom = self._transform_canvas_to_layer_geom(self.current_roi_geom, layer)
+        pr_set = vl_settlement.dataProvider()
+        sf = QgsFeature(vl_settlement.fields())
+        sf.setGeometry(layer_geom)
+        sf.setAttribute("id", vl_settlement.featureCount() + 1)
+        sf.setAttribute("name", village_name)
+        sf.setAttribute("type", s_type)
+        sf.setAttribute("type_uri", s_uri)
+        sf.setAttribute("building_count", len(new_bld_features))
+        sf.setAttribute("area_m2", round(float(layer_geom.area()), 1))
+        sf.setAttribute("area_ha", round(float(layer_geom.area()) / 10000.0, 2))
+        sf.setAttribute("sheet", layer.name())
+        pr_set.addFeatures([sf])
+        vl_settlement.updateExtents()
+        vl_settlement.triggerRepaint()
+
+        # 3. Clean up live preview layer and rubber band
+        for l in QgsProject.instance().mapLayersByName("🔍 Historical Buildings (Live Preview)"):
+            pr_prev = l.dataProvider()
+            pr_prev.deleteFeatures(l.allFeatureIds())
+            l.triggerRepaint()
+
+        if hasattr(self, 'roi_rubber_band') and self.roi_rubber_band:
+            self.roi_rubber_band.reset(QgsWkbTypes.PolygonGeometry)
+            self.roi_rubber_band.hide()
+
+        if hasattr(self, 'gazetteer_pick_band') and self.gazetteer_pick_band:
+            self.gazetteer_pick_band.reset(QgsWkbTypes.PolygonGeometry)
+            self.gazetteer_pick_band.hide()
+
+        self.current_roi = None
+        self.current_roi_geom = None
+        self.current_preview_features = []
+        self.cached_roi_rgb = None
+
+        msg = f"✓ Dorf '{village_name}' ({len(new_bld_features)} Gebäude) gespeichert! Du kannst das nächste Dorf einzeichnen."
+        self.status_lbl.setText(msg)
+        self.roi_info_lbl.setText(f"Gespeichert: '{village_name}' ({len(new_bld_features)} Gebäude). Bereit für nächstes Dorf.")
+        self.canvas.refresh()
+        if not silent:
+            self.status_lbl.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 10px;")
 
     def _transform_canvas_to_layer_rect(self, rect: QgsRectangle, layer: QgsRasterLayer) -> QgsRectangle:
         """Transforms rectangle from Canvas CRS to Raster Layer CRS."""
@@ -864,6 +1326,9 @@ class TranchotDockWidget(QDockWidget):
         if hasattr(self, 'roi_rubber_band') and self.roi_rubber_band:
             self.roi_rubber_band.reset(QgsWkbTypes.PolygonGeometry)
             self.roi_rubber_band.hide()
+        if hasattr(self, 'gazetteer_pick_band') and self.gazetteer_pick_band:
+            self.gazetteer_pick_band.reset(QgsWkbTypes.PolygonGeometry)
+            self.gazetteer_pick_band.hide()
         if self.roi_tool:
             self.roi_tool.reset()
         self.roi_info_lbl.setText("Area: No settlement polygon drawn yet (use button above)")
@@ -1121,6 +1586,9 @@ class TranchotDockWidget(QDockWidget):
             vl.updateExtents()
             vl.triggerRepaint()
 
+            # Save reference for permanent village saving
+            self.current_preview_features = qgis_features
+
             # Ensure layer is checked/visible in layer tree
             node = QgsProject.instance().layerTreeRoot().findLayer(vl.id())
             if node and not node.isVisible():
@@ -1147,7 +1615,32 @@ class TranchotDockWidget(QDockWidget):
         if mode == "normalized":
             self.btn_view_norm.setChecked(True)
             self.btn_view_orig.setChecked(False)
+
+            # Check if norm_layer exists AND is backed by a valid (non-zero/non-empty) file
+            valid_existing = False
             if norm_layers:
+                nl = norm_layers[0]
+                src = nl.dataProvider().dataSourceUri() if (nl and nl.isValid()) else ""
+                if src and os.path.exists(src):
+                    try:
+                        t_ds = gdal.Open(src, gdal.GA_ReadOnly)
+                        if t_ds and t_ds.RasterXSize > 0 and t_ds.RasterYSize > 0:
+                            cx = t_ds.RasterXSize // 2
+                            cy = t_ds.RasterYSize // 2
+                            s = t_ds.GetRasterBand(1).ReadAsArray(cx, cy, min(100, t_ds.RasterXSize - cx), min(100, t_ds.RasterYSize - cy))
+                            if s is not None and int(s.max()) > 0:
+                                valid_existing = True
+                        t_ds = None
+                    except Exception:
+                        valid_existing = False
+
+                if not valid_existing:
+                    # Remove corrupt / black layer from QGIS
+                    for ol in norm_layers:
+                        QgsProject.instance().removeMapLayer(ol.id())
+                    norm_layers = []
+
+            if norm_layers and valid_existing:
                 norm_layer = norm_layers[0]
                 node_norm = QgsProject.instance().layerTreeRoot().findLayer(norm_layer.id())
                 if node_norm:
@@ -1183,17 +1676,36 @@ class TranchotDockWidget(QDockWidget):
             self.status_lbl.setText("Raster file not found.")
             return
 
-        self.status_lbl.setText("Computing global parchment white-balance for map sheet...")
-        QgsApplication.processEvents()
-
         norm_layer_name = f"🎨 {layer.name()} (Normalized)"
         base_name = os.path.splitext(os.path.basename(raster_path))[0]
         cache_dir = os.path.join(tempfile.gettempdir(), "tranchot_norm_cache")
         os.makedirs(cache_dir, exist_ok=True)
         cached_file = os.path.join(cache_dir, f"{base_name}_norm.tif")
 
+        def _is_valid_cache(fpath: str) -> bool:
+            if not os.path.exists(fpath):
+                return False
+            try:
+                test_ds = gdal.Open(fpath, gdal.GA_ReadOnly)
+                if test_ds is None or test_ds.RasterXSize == 0 or test_ds.RasterYSize == 0:
+                    return False
+                cx = test_ds.RasterXSize // 2
+                cy = test_ds.RasterYSize // 2
+                sample = test_ds.GetRasterBand(1).ReadAsArray(cx, cy, min(100, test_ds.RasterXSize - cx), min(100, test_ds.RasterYSize - cy))
+                test_ds = None
+                return sample is not None and int(sample.max()) > 0
+            except Exception:
+                return False
+
         try:
-            if not os.path.exists(cached_file):
+            if not _is_valid_cache(cached_file):
+                # Clean up existing corrupted layer in QGIS project if loaded to release file lock
+                for old_l in QgsProject.instance().mapLayersByName(norm_layer_name):
+                    QgsProject.instance().removeMapLayer(old_l.id())
+
+                self.status_lbl.setText("Computing global parchment white-balance for map sheet...")
+                QgsApplication.processEvents()
+
                 ds = gdal.Open(raster_path, gdal.GA_ReadOnly)
                 if ds is None:
                     self.status_lbl.setText("GDAL could not open raster file.")
@@ -1203,15 +1715,26 @@ class TranchotDockWidget(QDockWidget):
                 h = ds.RasterYSize
                 gt = ds.GetGeoTransform()
                 proj = ds.GetProjection()
+                has_alpha = (ds.RasterCount >= 4)
+                out_bands = 4 if has_alpha else 3
 
                 driver = gdal.GetDriverByName("GTiff")
                 options = ["COMPRESS=LZW", "TILED=YES"]
-                out_ds = driver.Create(cached_file, w, h, 3, gdal.GDT_Byte, options=options)
+
+                # Write to temp file first to prevent partial/corrupted cache files
+                tmp_file = os.path.join(cache_dir, f"{base_name}_norm_{os.getpid()}_{int(time.time())}.tmp")
+                out_ds = driver.Create(tmp_file, w, h, out_bands, gdal.GDT_Byte, options=options)
                 out_ds.SetGeoTransform(gt)
                 if proj:
                     out_ds.SetProjection(proj)
 
-                # 1. Estimate uniform parchment tone from full sheet thumbnail to guarantee 100% seamless tiles
+                out_ds.GetRasterBand(1).SetColorInterpretation(gdal.GCI_RedBand)
+                out_ds.GetRasterBand(2).SetColorInterpretation(gdal.GCI_GreenBand)
+                out_ds.GetRasterBand(3).SetColorInterpretation(gdal.GCI_BlueBand)
+                if has_alpha:
+                    out_ds.GetRasterBand(4).SetColorInterpretation(gdal.GCI_AlphaBand)
+
+                # 1. Estimate uniform parchment tone from full sheet thumbnail
                 thumb_w = min(1500, w)
                 thumb_h = min(1500, h)
                 thumb_r = ds.GetRasterBand(1).ReadAsArray(0, 0, w, h, buf_xsize=thumb_w, buf_ysize=thumb_h)
@@ -1241,6 +1764,11 @@ class TranchotDockWidget(QDockWidget):
                         )
                         for band_idx in range(3):
                             out_ds.GetRasterBand(band_idx + 1).WriteArray(enh[:, :, band_idx], x, y)
+
+                        if has_alpha:
+                            alpha = ds.GetRasterBand(4).ReadAsArray(x, y, tw, th)
+                            out_ds.GetRasterBand(4).WriteArray(alpha, x, y)
+
                         current_tile += 1
                         if current_tile % 4 == 0 or current_tile == total_tiles:
                             pct = int((current_tile / total_tiles) * 100)
@@ -1252,9 +1780,29 @@ class TranchotDockWidget(QDockWidget):
                 out_ds = None
                 ds = None
 
+                # Atomic replace
+                replaced = False
+                if os.path.exists(cached_file):
+                    try:
+                        os.remove(cached_file)
+                        shutil.move(tmp_file, cached_file)
+                        replaced = True
+                    except OSError:
+                        pass
+                if not replaced:
+                    if not os.path.exists(cached_file):
+                        shutil.move(tmp_file, cached_file)
+                    else:
+                        cached_file = os.path.join(cache_dir, f"{base_name}_norm_{int(time.time())}.tif")
+                        shutil.move(tmp_file, cached_file)
+
             self.progress_bar.setValue(100)
             norm_layer = QgsRasterLayer(cached_file, norm_layer_name)
             if norm_layer.isValid():
+                renderer = QgsMultiBandColorRenderer(norm_layer.dataProvider(), 1, 2, 3)
+                norm_layer.setRenderer(renderer)
+                norm_layer.triggerRepaint()
+
                 curr = self.layer_combo.currentLayer()
                 self.layer_combo.blockSignals(True)
                 try:

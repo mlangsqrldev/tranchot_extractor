@@ -198,3 +198,94 @@ class LandUseStampMapTool(QgsMapTool):
             self.finished.emit()
 
 
+class LandUseSamplePolygonMapTool(QgsMapTool):
+    """
+    Map tool allowing the user to draw an irregular polygon around a color/texture nuance
+    on the QGIS canvas to sample all pixels inside that polygon for a land-use class.
+    - Left-Click: Add vertex
+    - Mouse-Move: Rubberband preview to cursor
+    - Right-Click or Double-Click: Commit sample polygon
+    - Backspace: Remove last vertex
+    - Escape: Cancel drawing
+    """
+
+    polygon_sampled = pyqtSignal(QgsGeometry)
+    canceled = pyqtSignal()
+
+    def __init__(self, canvas, on_polygon_callback: Optional[Callable[[QgsGeometry], None]] = None):
+        super().__init__(canvas)
+        self.canvas = canvas
+        self.on_polygon_callback = on_polygon_callback
+        self.points: list = []
+
+        self.rubber_band = QgsRubberBand(self.canvas, QgsWkbTypes.PolygonGeometry)
+        self.rubber_band.setFillColor(QColor(255, 152, 0, 40))
+        self.rubber_band.setStrokeColor(QColor(255, 152, 0, 240))
+        self.rubber_band.setWidth(2)
+        self.rubber_band.setLineStyle(Qt.PenStyle.DashLine)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def canvasPressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            pt = self.toMapCoordinates(event.pos())
+            self.points.append(pt)
+            self._update_rubber_band(temp_point=pt)
+        elif event.button() == Qt.MouseButton.RightButton:
+            self._finish_polygon()
+
+    def canvasDoubleClickEvent(self, event):
+        self._finish_polygon()
+
+    def canvasMoveEvent(self, event):
+        if len(self.points) > 0:
+            temp_pt = self.toMapCoordinates(event.pos())
+            self._update_rubber_band(temp_point=temp_pt)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.reset()
+            self.canceled.emit()
+        elif event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
+            if len(self.points) > 0:
+                self.points.pop()
+                self._update_rubber_band()
+
+    def _update_rubber_band(self, temp_point: Optional[QgsPointXY] = None):
+        pts = list(self.points)
+        if temp_point is not None:
+            pts.append(temp_point)
+
+        if len(pts) < 2:
+            self.rubber_band.reset(QgsWkbTypes.PolygonGeometry)
+            return
+
+        if len(pts) == 2:
+            geom = QgsGeometry.fromPolylineXY(pts)
+        else:
+            geom = QgsGeometry.fromPolygonXY([pts])
+
+        self.rubber_band.setToGeometry(geom, None)
+        self.rubber_band.show()
+
+    def _finish_polygon(self):
+        if len(self.points) >= 3:
+            pts = list(self.points)
+            geom = QgsGeometry.fromPolygonXY([pts])
+            if not geom.isGeosValid():
+                geom = geom.makeValid()
+            self.polygon_sampled.emit(geom)
+            if self.on_polygon_callback:
+                self.on_polygon_callback(geom)
+        self.reset()
+
+    def reset(self):
+        self.points.clear()
+        if self.rubber_band:
+            self.rubber_band.reset(QgsWkbTypes.PolygonGeometry)
+            self.rubber_band.hide()
+
+    def deactivate(self):
+        self.reset()
+        super().deactivate()
+
+

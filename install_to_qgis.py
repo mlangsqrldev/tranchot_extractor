@@ -23,46 +23,38 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-def get_qgis_plugins_dir() -> Path:
-    """Determine default QGIS 3/4 plugins directory depending on operating system."""
+def get_qgis_plugins_dirs() -> list:
+    """Determine all QGIS 3/4 plugins directories depending on operating system and profiles."""
     system = platform.system()
     home = Path.home()
 
     if system == "Windows":
         appdata = os.environ.get("APPDATA")
-        if appdata:
-            qgis_base = Path(appdata) / "QGIS"
-        else:
-            qgis_base = home / "AppData" / "Roaming" / "QGIS"
+        qgis_base = Path(appdata) / "QGIS" if appdata else home / "AppData" / "Roaming" / "QGIS"
     elif system == "Darwin":  # macOS
         qgis_base = home / "Library" / "Application Support" / "QGIS"
     else:  # Linux / Unix
         qgis_base = home / ".local" / "share" / "QGIS"
-        
-    qgis_dir = "QGIS4" if (qgis_base / "QGIS4").exists() else "QGIS3"
-    return qgis_base / qgis_dir / "profiles" / "default" / "python" / "plugins"
+
+    target_dirs = []
+    for q_dir in ["QGIS4", "QGIS3"]:
+        base_dir = qgis_base / q_dir
+        if base_dir.exists():
+            profiles_dir = base_dir / "profiles"
+            if profiles_dir.exists():
+                for p in profiles_dir.iterdir():
+                    if p.is_dir():
+                        target_dirs.append(p / "python" / "plugins")
+            else:
+                target_dirs.append(base_dir / "profiles" / "default" / "python" / "plugins")
+
+    if not target_dirs:
+        target_dirs.append(qgis_base / "QGIS3" / "profiles" / "default" / "python" / "plugins")
+    return target_dirs
 
 
-def main():
-    print("=" * 65)
-    print("[*] HistMap Extractor - QGIS Plugin Installer (BCDH)")
-    print("=" * 65)
-
-    # 1. Determine source plugin directory
-    repo_root = Path(__file__).resolve().parent
-    plugin_src = repo_root / "tranchot_qgis_plugin"
-
-    if not plugin_src.exists():
-        # Fallback: check if script is inside root or subdirectory
-        alt_src = repo_root.parent / "tranchot_qgis_plugin"
-        if alt_src.exists():
-            plugin_src = alt_src
-        else:
-            print(f"❌ Fehler: Plugin-Quellordner nicht gefunden:\n   {plugin_src}")
-            return 1
-
-    # 2. Determine target QGIS plugins directory
-    qgis_plugins_dir = get_qgis_plugins_dir()
+def link_plugin(plugin_src: Path, qgis_plugins_dir: Path) -> bool:
+    """Link or copy plugin into target directory."""
     qgis_plugins_dir.mkdir(parents=True, exist_ok=True)
     target_plugin_link = qgis_plugins_dir / "tranchot_qgis"
     old_plugin_link = qgis_plugins_dir / "tranchot_extractor"
@@ -78,81 +70,94 @@ def main():
                         os.rmdir(old_path)
                     except OSError:
                         shutil.rmtree(old_path)
-                print(f"[i] Altes Plugin-Verzeichnis bereinigt: {old_path.name}")
+                print(f"  [i] Altes Verzeichnis bereinigt: {old_path.name}")
             except Exception as e:
-                print(f"[!] Bereinigungshinweis ({old_path.name}): {e}")
+                print(f"  [!] Bereinigungshinweis ({old_path.name}): {e}")
 
-    print(f"[*] Plugin-Quelle:     {plugin_src}")
-    print(f"[*] QGIS-Plugin-Pfad:  {target_plugin_link}\n")
-
-    # 3. Remove existing link/directory if present
+    # Remove existing link/directory if present
     if target_plugin_link.exists() or target_plugin_link.is_symlink():
         try:
             if target_plugin_link.is_symlink():
                 target_plugin_link.unlink()
-                print("ℹ️  Alte symbolische Verknüpfung entfernt.")
             elif target_plugin_link.is_dir():
                 try:
                     os.rmdir(target_plugin_link)
-                    print("ℹ️  Alte Junction-Verknüpfung entfernt.")
                 except OSError:
                     shutil.rmtree(target_plugin_link)
-                    print("ℹ️  Alten Plugin-Ordner entfernt.")
         except Exception as e:
-            print(f"⚠️  Warnung beim Entfernen des alten Pfads: {e}")
+            print(f"  ⚠️  Warnung beim Entfernen des alten Pfads: {e}")
 
-    # 4. Create Windows Directory Junction or Symlink
-    created = False
+    # Create Windows Directory Junction or Symlink
     if platform.system() == "Windows":
-        # Directory junction does not require Administrator privileges on Windows!
         cmd = f'cmd /c mklink /J "{target_plugin_link}" "{plugin_src}"'
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True, errors="replace")
         if res.returncode == 0:
-            print("✅ Directory Junction erfolgreich erstellt (Live-Verknüpfung aktiv).")
-            created = True
+            print(f"  ✅ Directory Junction aktiv -> {target_plugin_link}")
+            return True
         else:
-            # Fallback to copytree if junction fails
-            print(f"⚠️  Junction fehlgeschlagen: {res.stderr.strip()}")
-            print("📦 Kopiere stattdessen den Ordner...")
+            print(f"  ⚠️  Junction fehlgeschlagen, kopiere Ordner...")
             shutil.copytree(str(plugin_src), str(target_plugin_link))
-            print("✅ Ordner erfolgreich kopiert.")
-            created = True
+            print(f"  ✅ Ordner kopiert -> {target_plugin_link}")
+            return True
     else:
         try:
             os.symlink(str(plugin_src), str(target_plugin_link))
-            print("✅ Symbolische Verknüpfung erfolgreich erstellt.")
-            created = True
+            print(f"  ✅ Symlink aktiv -> {target_plugin_link}")
+            return True
         except Exception as e:
-            print(f"⚠️  Symlink fehlgeschlagen ({e}), kopiere Ordner...")
             shutil.copytree(str(plugin_src), str(target_plugin_link))
-            print("✅ Ordner erfolgreich kopiert.")
-            created = True
+            print(f"  ✅ Ordner kopiert -> {target_plugin_link}")
+            return True
 
-    # 5. Check QGIS Python environment for OpenCV and dependencies (Windows search)
+
+def main():
+    print("=" * 65)
+    print("[*] HistMap Extractor - QGIS Plugin Installer (BCDH)")
+    print("=" * 65)
+
+    # 1. Determine source plugin directory
+    repo_root = Path(__file__).resolve().parent
+    plugin_src = repo_root / "tranchot_qgis_plugin"
+
+    if not plugin_src.exists():
+        alt_src = repo_root.parent / "tranchot_qgis_plugin"
+        if alt_src.exists():
+            plugin_src = alt_src
+        else:
+            print(f"❌ Fehler: Plugin-Quellordner nicht gefunden:\n   {plugin_src}")
+            return 1
+
+    print(f"[*] Plugin-Quelle: {plugin_src}\n")
+
+    # 2. Determine target QGIS plugins directories
+    target_dirs = get_qgis_plugins_dirs()
+    for t_dir in target_dirs:
+        print(f"[*] Verknüpfe mit Profil: {t_dir}")
+        link_plugin(plugin_src, t_dir)
+
+    # 3. Check all QGIS Python environments for package installation
     if platform.system() == "Windows":
         import glob
-        qgis_candidates = (
+        qgis_candidates = sorted(
             glob.glob(r"C:\Program Files\QGIS 4.*\bin\python-qgis.bat") +
             glob.glob(r"C:\Program Files\QGIS 3.*\bin\python-qgis.bat") +
-            [r"C:\OSGeo4W\bin\python-qgis.bat"]
+            [r"C:\OSGeo4W\bin\python-qgis.bat"],
+            reverse=True
         )
-        qgis_python_bat = next((p for p in qgis_candidates if os.path.exists(p)), None)
 
-        if qgis_python_bat:
-            print(f"\n🔍 Prüfe QGIS Python-Umgebung ({qgis_python_bat})...")
-            # Install the package itself (which includes requirements)
-            setup_path = repo_root / "setup.py"
-            if setup_path.exists():
-                print(f"[i] Installiere tranchot_extractor in die QGIS-Umgebung...")
-                install_cmd = [qgis_python_bat, "-m", "pip", "install", "--user", "-e", str(repo_root)]
-                pip_res = subprocess.run(install_cmd, capture_output=True, text=True, errors="replace")
-                if pip_res.returncode == 0:
-                    print("[+] Abhängigkeiten erfolgreich in QGIS-Benutzerumgebung installiert.")
-                else:
-                    print(f"⚠️  Pip-Installation meldete Warnungen oder Fehler, siehe Details unten:")
-                    print(pip_res.stderr.strip()[:500])
-            else:
-                print("⚠️  Keine setup.py gefunden.")
+        seen_bats = set()
+        for qgis_python_bat in qgis_candidates:
+            if os.path.exists(qgis_python_bat) and qgis_python_bat not in seen_bats:
+                seen_bats.add(qgis_python_bat)
+                print(f"\n🔍 Prüfe QGIS Python-Umgebung ({qgis_python_bat})...")
+                setup_path = repo_root / "setup.py"
+                if setup_path.exists():
+                    install_cmd = [qgis_python_bat, "-m", "pip", "install", "--user", "--no-deps", "-e", str(repo_root)]
+                    pip_res = subprocess.run(install_cmd, capture_output=True, text=True, errors="replace")
+                    if pip_res.returncode == 0:
+                        print("  [+] tranchot_extractor erfolgreich im Entwicklungsmodus registriert.")
+                    else:
+                        print(f"  ⚠️  Pip-Hinweis: {pip_res.stderr.strip()[:300]}")
 
     print("\n" + "=" * 65)
     print("🎉 INSTALLATION COMPLETE / INSTALLATION ABGESCHLOSSEN!")

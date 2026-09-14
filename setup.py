@@ -7,7 +7,7 @@ setup(
     author="Bonn Center for Digital Humanities (BCDH)",
     packages=find_packages(),
     install_requires=[
-        "numpy>=1.24.0",
+        "numpy>=1.24.0,<2.0.0",
         "opencv-python>=4.8.0",
         "pillow>=10.0.0",
         "scikit-image>=0.21.0",

@@ -894,6 +894,61 @@ class TranchotDockWidget(QDockWidget):
         layout.addStretch(1)
         self.tabs.addTab(tab, "⚙️ System")
 
+    def _get_current_raster_layer(self) -> Optional[QgsRasterLayer]:
+        """Safely retrieves the active raster layer without crashing if C++ widgets were deleted or reloaded."""
+        try:
+            if hasattr(self, 'layer_combo') and self.layer_combo is not None:
+                layer = self.layer_combo.currentLayer()
+                if layer and isinstance(layer, QgsRasterLayer):
+                    return layer
+        except (RuntimeError, AttributeError):
+            pass
+        try:
+            active = self.iface.activeLayer()
+            if active and isinstance(active, QgsRasterLayer):
+                return active
+        except Exception:
+            pass
+        try:
+            for l in QgsProject.instance().mapLayers().values():
+                if isinstance(l, QgsRasterLayer):
+                    return l
+        except Exception:
+            pass
+        return None
+
+    def deactivate_all_map_tools(self):
+        """Unsets any of this widget's custom map tools from canvas and resets rubber bands."""
+        if hasattr(self, 'canvas') and self.canvas:
+            curr_tool = self.canvas.mapTool()
+            tools = [
+                getattr(self, 'roi_tool', None),
+                getattr(self, 'pipette_tool', None),
+                getattr(self, 'gazetteer_pick_tool', None),
+                getattr(self, 'lu_roi_tool', None),
+                getattr(self, 'lu_stamp_tool', None),
+                getattr(self, 'lu_sample_poly_tool', None),
+            ]
+            if curr_tool in tools and curr_tool is not None:
+                self.canvas.unsetMapTool(curr_tool)
+
+        for rb_name in ['roi_rubber_band', 'gazetteer_pick_band', 'lu_roi_rubber_band']:
+            if hasattr(self, rb_name):
+                rb = getattr(self, rb_name, None)
+                if rb:
+                    try:
+                        rb.reset(QgsWkbTypes.PolygonGeometry)
+                        rb.hide()
+                    except Exception:
+                        pass
+        if hasattr(self, 'lu_stamp_rubber_bands'):
+            for _, rb in self.lu_stamp_rubber_bands:
+                try:
+                    rb.reset(QgsWkbTypes.PolygonGeometry)
+                    rb.hide()
+                except Exception:
+                    pass
+
     def _init_map_tools(self):
         """Initializes custom QGIS MapTools for canvas interaction."""
         self.roi_tool = PolygonRoiMapTool(self.canvas, on_polygon_callback=self._on_polygon_roi_selected)
@@ -2272,8 +2327,8 @@ class TranchotDockWidget(QDockWidget):
 
     def _cache_lu_roi_data(self):
         """Caches raster cutout for Land Use ROI to enable real-time slider updates."""
-        layer = self.layer_combo.currentLayer()
-        if not layer or not isinstance(layer, QgsRasterLayer):
+        layer = self._get_current_raster_layer()
+        if not layer:
             return
 
         raster_path = layer.dataProvider().dataSourceUri()
@@ -2348,8 +2403,8 @@ class TranchotDockWidget(QDockWidget):
 
     def _on_lu_stamp_sampled(self, point: QgsPointXY):
         """Callback when user clicks canvas to sample a color/texture nuance for a land use class."""
-        layer = self.layer_combo.currentLayer()
-        if not layer or not isinstance(layer, QgsRasterLayer):
+        layer = self._get_current_raster_layer()
+        if not layer:
             self.status_lbl.setText("No valid raster map active.")
             return
 
@@ -2470,8 +2525,8 @@ class TranchotDockWidget(QDockWidget):
 
     def _on_lu_sample_polygon_drawn(self, geom: QgsGeometry):
         """Callback when user completes drawing a sample polygon on canvas."""
-        layer = self.layer_combo.currentLayer()
-        if not layer or not isinstance(layer, QgsRasterLayer):
+        layer = self._get_current_raster_layer()
+        if not layer:
             self.status_lbl.setText("No valid raster map active.")
             self._cancel_lu_sample_poly()
             return
@@ -2685,8 +2740,8 @@ class TranchotDockWidget(QDockWidget):
         if not hasattr(self, 'chk_lu_live_preview') or not self.chk_lu_live_preview.isChecked():
             return
 
-        layer = self.layer_combo.currentLayer()
-        if not layer or not isinstance(layer, QgsRasterLayer):
+        layer = self._get_current_raster_layer()
+        if not layer:
             return
 
         if self.rb_lu_roi.isChecked():
@@ -2831,8 +2886,8 @@ class TranchotDockWidget(QDockWidget):
 
     def _run_landuse_extraction(self):
         """Launches the LandUseExtractionTask in background thread."""
-        layer = self.layer_combo.currentLayer()
-        if not layer or not isinstance(layer, QgsRasterLayer):
+        layer = self._get_current_raster_layer()
+        if not layer:
             QMessageBox.warning(self, "No Raster Map Selected", "Please select an active historical map sheet first.")
             return
 
@@ -3025,6 +3080,8 @@ class TranchotDockWidget(QDockWidget):
 
     def _hot_reload_plugin(self):
         """Hot-reloads all plugin and backend modules, replacing this dockwidget instance immediately."""
+        self.deactivate_all_map_tools()
+
         import sys
         import importlib
 
@@ -3049,5 +3106,6 @@ class TranchotDockWidget(QDockWidget):
             self.status_lbl.setText(f"Reload note: {e}")
 
     def closeEvent(self, event):
+        self.deactivate_all_map_tools()
         self.closingPlugin.emit()
         event.accept()

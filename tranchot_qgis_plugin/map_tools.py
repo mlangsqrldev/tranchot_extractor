@@ -85,19 +85,22 @@ class PolygonRoiMapTool(QgsMapTool):
         self.rubber_band.show()
 
     def _finish_polygon(self):
-        if len(self.points) >= 3:
-            pts = list(self.points)
-            geom = QgsGeometry.fromPolygonXY([pts])
-            if geom.isGeosValid():
+        try:
+            if len(self.points) >= 3:
+                pts = list(self.points)
+                geom = QgsGeometry.fromPolygonXY([pts])
+                if not geom.isGeosValid():
+                    geom = geom.makeValid()
                 self.polygon_selected.emit(geom)
                 if self.on_polygon_callback:
                     self.on_polygon_callback(geom)
-            else:
-                fixed = geom.makeValid()
-                self.polygon_selected.emit(fixed)
-                if self.on_polygon_callback:
-                    self.on_polygon_callback(fixed)
-        self.reset()
+        except Exception as e:
+            from qgis.core import QgsMessageLog, Qgis
+            QgsMessageLog.logMessage(f"Polygon ROI callback error: {e}", "Tranchot", Qgis.Warning)
+        finally:
+            self.reset()
+            if self.canvas.mapTool() == self:
+                self.canvas.unsetMapTool(self)
 
     def reset(self):
         self.points.clear()
@@ -268,15 +271,22 @@ class LandUseSamplePolygonMapTool(QgsMapTool):
         self.rubber_band.show()
 
     def _finish_polygon(self):
-        if len(self.points) >= 3:
-            pts = list(self.points)
-            geom = QgsGeometry.fromPolygonXY([pts])
-            if not geom.isGeosValid():
-                geom = geom.makeValid()
-            self.polygon_sampled.emit(geom)
-            if self.on_polygon_callback:
-                self.on_polygon_callback(geom)
-        self.reset()
+        try:
+            if len(self.points) >= 3:
+                pts = list(self.points)
+                geom = QgsGeometry.fromPolygonXY([pts])
+                if not geom.isGeosValid():
+                    geom = geom.makeValid()
+                self.polygon_sampled.emit(geom)
+                if self.on_polygon_callback:
+                    self.on_polygon_callback(geom)
+        except Exception as e:
+            from qgis.core import QgsMessageLog, Qgis
+            QgsMessageLog.logMessage(f"Polygon sample callback error: {e}", "Tranchot", Qgis.Warning)
+        finally:
+            self.reset()
+            if self.canvas.mapTool() == self:
+                self.canvas.unsetMapTool(self)
 
     def reset(self):
         self.points.clear()

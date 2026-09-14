@@ -54,6 +54,10 @@ class TranchotPlugin:
             del self.toolbar
 
         if self.dockwidget:
+            try:
+                self.dockwidget.deactivate_all_map_tools()
+            except Exception:
+                pass
             self.iface.removeDockWidget(self.dockwidget)
             self.dockwidget.deleteLater()
             self.dockwidget = None
@@ -62,6 +66,16 @@ class TranchotPlugin:
         """Toggles or displays the Tranchot dock widget panel with hot-reloading."""
         import sys
         import importlib
+
+        # Deactivate any map tools from existing dockwidget first
+        if self.dockwidget is not None:
+            try:
+                self.dockwidget.deactivate_all_map_tools()
+                self.iface.removeDockWidget(self.dockwidget)
+                self.dockwidget.deleteLater()
+            except Exception:
+                pass
+            self.dockwidget = None
 
         # Dynamically reload all related modules so on-disk code and translation updates take effect immediately
         for mod_name in list(sys.modules.keys()):
@@ -74,14 +88,6 @@ class TranchotPlugin:
         # Re-import fresh TranchotDockWidget class
         from .dockwidget import TranchotDockWidget
 
-        if self.dockwidget is not None:
-            try:
-                self.iface.removeDockWidget(self.dockwidget)
-                self.dockwidget.deleteLater()
-            except Exception:
-                pass
-            self.dockwidget = None
-
         self.dockwidget = TranchotDockWidget(self.iface, self.iface.mainWindow())
         self.dockwidget.closingPlugin.connect(self._on_dockwidget_closed)
         self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dockwidget)
@@ -93,6 +99,7 @@ class TranchotPlugin:
         """Handle cleanup when user closes dockwidget."""
         if self.dockwidget is not None:
             try:
+                self.dockwidget.deactivate_all_map_tools()
                 self.iface.removeDockWidget(self.dockwidget)
                 self.dockwidget.deleteLater()
             except Exception:

@@ -37,16 +37,16 @@ class PolygonRoiMapTool(QgsMapTool):
         self.rubber_band.setFillColor(fill_color)
         self.rubber_band.setStrokeColor(border_color)
         self.rubber_band.setWidth(2)
-        self.rubber_band.setLineStyle(Qt.DashLine)
+        self.rubber_band.setLineStyle(Qt.PenStyle.DashLine)
 
-        self.setCursor(Qt.CrossCursor)
+        self.setCursor(Qt.CursorShape.CrossCursor)
 
     def canvasPressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             pt = self.toMapCoordinates(event.pos())
             self.points.append(pt)
             self._update_rubber_band(temp_point=pt)
-        elif event.button() == Qt.RightButton:
+        elif event.button() == Qt.MouseButton.RightButton:
             self._finish_polygon()
 
     def canvasDoubleClickEvent(self, event):
@@ -58,10 +58,10 @@ class PolygonRoiMapTool(QgsMapTool):
             self._update_rubber_band(temp_point=temp_pt)
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
+        if event.key() == Qt.Key.Key_Escape:
             self.reset()
             self.canceled.emit()
-        elif event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+        elif event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
             if len(self.points) > 0:
                 self.points.pop()
                 self._update_rubber_band()
@@ -126,10 +126,10 @@ class PipetteMapTool(QgsMapToolEmitPoint):
         super().__init__(canvas)
         self.canvas = canvas
         self.on_sample_callback = on_sample_callback
-        self.setCursor(Qt.CrossCursor)
+        self.setCursor(Qt.CursorShape.CrossCursor)
 
     def canvasPressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             point = self.toMapCoordinates(event.pos())
             self.point_sampled.emit(point)
             if self.on_sample_callback:

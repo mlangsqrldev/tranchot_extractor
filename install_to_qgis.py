@@ -4,9 +4,9 @@ Links the plugin source code into the active QGIS profile directory so that
 changes are immediately live in QGIS without manual copying.
 
 Supports:
-- Windows (%APPDATA%/QGIS/QGIS3/profiles/default/python/plugins)
-- Linux (~/.local/share/QGIS/QGIS3/profiles/default/python/plugins)
-- macOS (~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins)
+- Windows (%APPDATA%/QGIS/QGIS4/profiles/default/python/plugins)
+- Linux (~/.local/share/QGIS/QGIS4/profiles/default/python/plugins)
+- macOS (~/Library/Application Support/QGIS/QGIS4/profiles/default/python/plugins)
 
 Developed by the Bonn Center for Digital Humanities (BCDH), University of Bonn.
 """
@@ -24,19 +24,23 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 def get_qgis_plugins_dir() -> Path:
-    """Determine default QGIS 3 plugins directory depending on operating system."""
+    """Determine default QGIS 3/4 plugins directory depending on operating system."""
     system = platform.system()
     home = Path.home()
 
     if system == "Windows":
         appdata = os.environ.get("APPDATA")
         if appdata:
-            return Path(appdata) / "QGIS" / "QGIS3" / "profiles" / "default" / "python" / "plugins"
-        return home / "AppData" / "Roaming" / "QGIS" / "QGIS3" / "profiles" / "default" / "python" / "plugins"
+            qgis_base = Path(appdata) / "QGIS"
+        else:
+            qgis_base = home / "AppData" / "Roaming" / "QGIS"
     elif system == "Darwin":  # macOS
-        return home / "Library" / "Application Support" / "QGIS" / "QGIS3" / "profiles" / "default" / "python" / "plugins"
+        qgis_base = home / "Library" / "Application Support" / "QGIS"
     else:  # Linux / Unix
-        return home / ".local" / "share" / "QGIS" / "QGIS3" / "profiles" / "default" / "python" / "plugins"
+        qgis_base = home / ".local" / "share" / "QGIS"
+        
+    qgis_dir = "QGIS4" if (qgis_base / "QGIS4").exists() else "QGIS3"
+    return qgis_base / qgis_dir / "profiles" / "default" / "python" / "plugins"
 
 
 def main():
@@ -126,33 +130,34 @@ def main():
 
     # 5. Check QGIS Python environment for OpenCV and dependencies (Windows search)
     if platform.system() == "Windows":
-        qgis_candidates = [
-            r"C:\Program Files\QGIS 3.42.1\bin\python-qgis.bat",
-            r"C:\Program Files\QGIS 3.38.1\bin\python-qgis.bat",
-            r"C:\Program Files\QGIS 3.34.1\bin\python-qgis.bat",
-            r"C:\OSGeo4W\bin\python-qgis.bat",
-        ]
+        import glob
+        qgis_candidates = (
+            glob.glob(r"C:\Program Files\QGIS 4.*\bin\python-qgis.bat") +
+            glob.glob(r"C:\Program Files\QGIS 3.*\bin\python-qgis.bat") +
+            [r"C:\OSGeo4W\bin\python-qgis.bat"]
+        )
         qgis_python_bat = next((p for p in qgis_candidates if os.path.exists(p)), None)
 
         if qgis_python_bat:
             print(f"\n🔍 Prüfe QGIS Python-Umgebung ({qgis_python_bat})...")
-            check_cmd = [qgis_python_bat, "-c", "import cv2; print('OK')"]
-            cv_check = subprocess.run(check_cmd, capture_output=True, text=True, errors="replace")
-            if "OK" in cv_check.stdout:
-                print("✅ OpenCV ist bereits in QGIS verfügbar!")
-            else:
-                print("[i] OpenCV fehlt noch im QGIS-Python. Installiere 'opencv-python'...")
-                install_cmd = [qgis_python_bat, "-m", "pip", "install", "--user", "--no-deps", "opencv-python"]
+            # Install the package itself (which includes requirements)
+            setup_path = repo_root / "setup.py"
+            if setup_path.exists():
+                print(f"[i] Installiere tranchot_extractor in die QGIS-Umgebung...")
+                install_cmd = [qgis_python_bat, "-m", "pip", "install", "--user", "-e", str(repo_root)]
                 pip_res = subprocess.run(install_cmd, capture_output=True, text=True, errors="replace")
                 if pip_res.returncode == 0:
                     print("[+] Abhängigkeiten erfolgreich in QGIS-Benutzerumgebung installiert.")
                 else:
-                    print(f"⚠️  Pip-Installation meldete: {pip_res.stderr.strip()[:200]}")
+                    print(f"⚠️  Pip-Installation meldete Warnungen oder Fehler, siehe Details unten:")
+                    print(pip_res.stderr.strip()[:500])
+            else:
+                print("⚠️  Keine setup.py gefunden.")
 
     print("\n" + "=" * 65)
     print("🎉 INSTALLATION COMPLETE / INSTALLATION ABGESCHLOSSEN!")
     print("How to activate the plugin in QGIS / Aktivierung in QGIS:")
-    print("1. Start / Restart QGIS 3.")
+    print("1. Start / Restart QGIS.")
     print("2. Open menu: 'Plugins' -> 'Manage and Install Plugins...' ('Erweiterungen verwalten...')")
     print("3. Select 'Installed' ('Installiert') and check 'HistMap Extractor'.")
     print("4. Click the new toolbar icon '🗺️ HistMap Extractor'!")

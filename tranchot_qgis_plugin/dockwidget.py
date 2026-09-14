@@ -51,11 +51,15 @@ from qgis.core import (
     QgsField,
     QgsFillSymbol,
     QgsSingleSymbolRenderer,
-    QgsWkbTypes
+    QgsWkbTypes,
+    QgsSpatialIndex,
+    QgsCoordinateReferenceSystem,
+    QgsCoordinateTransform,
+    QgsFeatureRequest
 )
 
 from .map_tools import PolygonRoiMapTool, RoiExtentMapTool, PipetteMapTool
-from .tasks import BuildingExtractionTask, LandUseExtractionTask
+from .tasks import BuildingExtractionTask, LandUseExtractionTask, TextExtractionTask
 
 
 # -----------------------------------------------------------------------------
@@ -76,15 +80,18 @@ for _candidate in _candidate_backend_dirs:
             sys.path.insert(0, _candidate)
 
 try:
-    from tranchot_extractor.config import BuildingConfig, RoadConfig, LandUseConfig
+    from tranchot_extractor.config import BuildingConfig, RoadConfig, LandUseConfig, TextConfig
     from tranchot_extractor.extractors.building_extractor import BuildingExtractor
     from tranchot_extractor.preprocessing.color_enhancer import ColorEnhancer
+    from tranchot_extractor.extractors.text_extractor import TextExtractor
 except Exception:
     BuildingConfig = None
     RoadConfig = None
     LandUseConfig = None
+    TextConfig = None
     BuildingExtractor = None
     ColorEnhancer = None
+    TextExtractor = None
 
 
 class TranchotDockWidget(QDockWidget):
@@ -98,12 +105,18 @@ class TranchotDockWidget(QDockWidget):
         super().__init__("Tranchot Extractor", parent)
         self.iface = iface
         self.canvas = self.iface.mapCanvas()
-        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
 
         self.current_roi: Optional[QgsRectangle] = None
         self.roi_tool: Optional[RoiExtentMapTool] = None
         self.pipette_tool: Optional[PipetteMapTool] = None
+        self.cached_roi_rgb = None
+        self.cached_roi_crs = None
         self.current_task: Optional[BuildingExtractionTask] = None
+        self.gazetteer_layer = None
+        self.current_gazetteer_match = None
+        self.current_type_match = None
+        self.current_type_uri = None
         self.roi_rubber_band: Optional[QgsRubberBand] = None
 
         # ROI cache for instant live preview calculations
@@ -186,7 +199,7 @@ class TranchotDockWidget(QDockWidget):
         # Scrollable area for tabs
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout(scroll_content)
         scroll_layout.setContentsMargins(0, 0, 0, 0)
@@ -195,6 +208,7 @@ class TranchotDockWidget(QDockWidget):
         self.tabs = QTabWidget()
         self._create_building_tab()
         self._create_landuse_tab()
+        self._create_text_tab()
         self._create_roads_tab()
         self._create_system_tab()
         scroll_layout.addWidget(self.tabs)
@@ -249,6 +263,42 @@ class TranchotDockWidget(QDockWidget):
         self.roi_info_lbl.setStyleSheet("color: #888888; font-size: 10px;")
         roi_layout.addWidget(self.roi_info_lbl)
 
+        # Gazetteer Match Section
+        gaz_box = QHBoxLayout()
+        gaz_lbl = QLabel("Toponym Match:")
+        self.gazetteer_combo = QComboBox()
+        self.gazetteer_combo.addItem("None")
+        self.gazetteer_combo.setToolTip("Select the settlement name for this polygon to write to the building features.")
+        self.gazetteer_combo.currentTextChanged.connect(self._on_gazetteer_match_changed)
+        gaz_box.addWidget(gaz_lbl)
+        gaz_box.addWidget(self.gazetteer_combo)
+        roi_layout.addLayout(gaz_box)
+        
+        type_box = QHBoxLayout()
+        type_lbl = QLabel("Siedlungstyp (LVR):")
+        self.type_combo = QComboBox()
+        self.type_combo.addItem("Default (Building/Courtyard)", None)
+        csv_path = os.path.join(os.path.dirname(__file__), "resources", "siedlungstypen_lvr_vokabular.csv")
+        try:
+            with open(csv_path, "r", encoding="utf-8") as f:
+                header = next(f)
+                for line in f:
+                    parts = line.strip().split(";")
+                    if len(parts) >= 2:
+                        s_type = parts[0]
+                        s_uri = parts[1]
+                        self.type_combo.addItem(s_type, s_uri)
+        except Exception:
+            pass
+        self.type_combo.currentTextChanged.connect(self._on_type_match_changed)
+        type_box.addWidget(type_lbl)
+        type_box.addWidget(self.type_combo)
+        roi_layout.addLayout(type_box)
+        
+        self.gazetteer_info_lbl = QLabel("Awaiting polygon...")
+        self.gazetteer_info_lbl.setStyleSheet("color: #888888; font-size: 10px;")
+        roi_layout.addWidget(self.gazetteer_info_lbl)
+
         # Checkbox for interactive live preview
         self.chk_live_preview = QCheckBox("⚡ Live Preview active (instant response on slider adjustments)")
         self.chk_live_preview.setChecked(True)
@@ -289,7 +339,7 @@ class TranchotDockWidget(QDockWidget):
             header_layout.addWidget(spin)
             row_box.addLayout(header_layout)
 
-            slider = QSlider(Qt.Horizontal)
+            slider = QSlider(Qt.Orientation.Horizontal)
             slider_min = int(round(min_val * scale))
             slider_max = int(round(max_val * scale))
             slider.setRange(slider_min, slider_max)
@@ -401,7 +451,7 @@ class TranchotDockWidget(QDockWidget):
 
         # Separator line
         sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet("color: #444;")
         param_layout.addWidget(sep)
 
@@ -530,6 +580,25 @@ class TranchotDockWidget(QDockWidget):
         layout.addStretch(1)
         self.tabs.addTab(tab, "🌲 Land Use")
 
+    def _create_text_tab(self):
+        """Creates Tab for Text and Toponyms."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(6, 6, 6, 6)
+
+        info_lbl = QLabel("Text Extraction relies on Tesseract OCR and the Historical Gazetteer.")
+        info_lbl.setWordWrap(True)
+        layout.addWidget(info_lbl)
+
+        btn_extract = QPushButton("🔍 Extract Text & Toponyms (ROI)")
+        btn_extract.setStyleSheet("background-color: #0277bd; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
+        btn_extract.clicked.connect(self._run_text_extraction)
+        layout.addWidget(btn_extract)
+
+        layout.addStretch()
+        self.tabs.addTab(tab, "📝 Text")
+
+
 
     def _create_roads_tab(self):
         """Creates Tab 3: Road network."""
@@ -633,14 +702,17 @@ class TranchotDockWidget(QDockWidget):
             self.roi_rubber_band.setFillColor(QColor(0, 0, 0, 0))  # 100% transparent interior
             self.roi_rubber_band.setStrokeColor(QColor(0, 180, 216, 240))  # Crisp cyan dashed outline
             self.roi_rubber_band.setWidth(2)
-            self.roi_rubber_band.setLineStyle(Qt.DashLine)
+            self.roi_rubber_band.setLineStyle(Qt.PenStyle.DashLine)
         else:
             self.roi_rubber_band.setFillColor(QColor(0, 0, 0, 0))
             self.roi_rubber_band.setStrokeColor(QColor(0, 180, 216, 240))
             self.roi_rubber_band.setWidth(2)
-            self.roi_rubber_band.setLineStyle(Qt.DashLine)
+            self.roi_rubber_band.setLineStyle(Qt.PenStyle.DashLine)
         self.roi_rubber_band.setToGeometry(geom, None)
         self.roi_rubber_band.show()
+
+        # Update Gazetteer Match
+        self._update_gazetteer_matches(geom)
 
         # Cache raster data for fast live slider vectorization
         self._cache_roi_data()
@@ -655,6 +727,100 @@ class TranchotDockWidget(QDockWidget):
 
     # Alias for backward compatibility
     _on_roi_selected = _on_polygon_roi_selected
+
+    def _update_gazetteer_matches(self, geom: QgsGeometry):
+        self.gazetteer_combo.blockSignals(True)
+        self.gazetteer_combo.clear()
+        self.gazetteer_combo.addItem("None")
+        
+        try:
+            if self.gazetteer_layer is None:
+                gaz_path = os.path.join(os.path.dirname(__file__), "resources", "gazeteer_gov.geojson")
+                if os.path.exists(gaz_path):
+                    self.gazetteer_layer = QgsVectorLayer(gaz_path, "Gazetteer", "ogr")
+                    if self.gazetteer_layer.isValid():
+                        self.gazetteer_index = QgsSpatialIndex(self.gazetteer_layer.getFeatures())
+                    else:
+                        self.gazetteer_layer = None
+
+            if not self.gazetteer_layer:
+                self.gazetteer_info_lbl.setText("Gazetteer data not found.")
+                return
+
+            crs_canvas = self.canvas.mapSettings().destinationCrs()
+            crs_4326 = QgsCoordinateReferenceSystem("EPSG:4326")
+            crs_3857 = QgsCoordinateReferenceSystem("EPSG:3857")
+            xform_ctx = QgsProject.instance().transformContext()
+
+            geom_4326 = QgsGeometry(geom)
+            geom_4326.transform(QgsCoordinateTransform(crs_canvas, crs_4326, xform_ctx))
+
+            matches = []
+            is_fallback = False
+            centroid_4326 = geom_4326.centroid()
+
+            fids = self.gazetteer_index.intersects(geom_4326.boundingBox())
+            req = QgsFeatureRequest().setFilterFids(fids)
+            for f in self.gazetteer_layer.getFeatures(req):
+                if f.geometry().intersects(geom_4326):
+                    matches.append(f)
+
+            if not matches:
+                is_fallback = True
+                geom_3857 = QgsGeometry(centroid_4326)
+                geom_3857.transform(QgsCoordinateTransform(crs_4326, crs_3857, xform_ctx))
+                buffer_3857 = geom_3857.buffer(2000, 8)
+                buffer_4326 = QgsGeometry(buffer_3857)
+                buffer_4326.transform(QgsCoordinateTransform(crs_3857, crs_4326, xform_ctx))
+
+                fids = self.gazetteer_index.intersects(buffer_4326.boundingBox())
+                req = QgsFeatureRequest().setFilterFids(fids)
+                for f in self.gazetteer_layer.getFeatures(req):
+                    if f.geometry().intersects(buffer_4326):
+                        matches.append(f)
+
+            if matches:
+                matches.sort(key=lambda f: f.geometry().distance(centroid_4326))
+                for i, f in enumerate(matches[:5]):
+                    name = str(f["name"]) if f["name"] else "Unknown"
+                    self.gazetteer_combo.addItem(name)
+
+                if is_fallback:
+                    self.gazetteer_info_lbl.setText(f"Found {min(5, len(matches))} nearby matches (2km fallback)")
+                else:
+                    self.gazetteer_info_lbl.setText(f"Found {min(5, len(matches))} matches within polygon")
+                
+                # Auto-select the best match
+                self.gazetteer_combo.setCurrentIndex(1)
+                self.current_gazetteer_match = self.gazetteer_combo.currentText()
+            else:
+                self.gazetteer_info_lbl.setText("No matches found nearby.")
+                self.current_gazetteer_match = None
+                
+        except Exception as e:
+            self.gazetteer_info_lbl.setText(f"Error querying gazetteer: {e}")
+        finally:
+            self.gazetteer_combo.blockSignals(False)
+
+    def _on_gazetteer_match_changed(self, text):
+        if text == "None":
+            self.current_gazetteer_match = None
+        else:
+            self.current_gazetteer_match = text
+            
+        if hasattr(self, 'chk_live_preview') and self.chk_live_preview.isChecked():
+            self._update_live_preview()
+
+    def _on_type_match_changed(self, text):
+        if text == "Default (Building/Courtyard)":
+            self.current_type_match = None
+            self.current_type_uri = None
+        else:
+            self.current_type_match = text
+            self.current_type_uri = self.type_combo.currentData()
+            
+        if hasattr(self, 'chk_live_preview') and self.chk_live_preview.isChecked():
+            self._update_live_preview()
 
     def _transform_canvas_to_layer_rect(self, rect: QgsRectangle, layer: QgsRasterLayer) -> QgsRectangle:
         """Transforms rectangle from Canvas CRS to Raster Layer CRS."""
@@ -890,6 +1056,8 @@ class TranchotDockWidget(QDockWidget):
                     QgsField("perimeter_m", QVariant.Double),
                     QgsField("compactness", QVariant.Double),
                     QgsField("orientation", QVariant.Double),
+                    QgsField("settlement", QVariant.String),
+                    QgsField("type_uri", QVariant.String),
                 ]
                 pr.addAttributes(fields)
                 vl.updateFields()
@@ -928,11 +1096,19 @@ class TranchotDockWidget(QDockWidget):
                         f = QgsFeature(vl.fields())
                         f.setGeometry(QgsGeometry.fromWkt(geo_poly.wkt))
                         f.setAttribute("id", feat.id)
-                        f.setAttribute("type", "Courtyard Complex" if len(poly.interiors) > 0 else "Building")
+                        
+                        if hasattr(self, 'current_type_match') and self.current_type_match:
+                            f.setAttribute("type", self.current_type_match)
+                            f.setAttribute("type_uri", self.current_type_uri)
+                        else:
+                            f.setAttribute("type", "Courtyard Complex" if len(poly.interiors) > 0 else "Building")
+                            
                         f.setAttribute("area_m2", round(float(feat.area_px) * m2_per_px2, 2))
                         f.setAttribute("perimeter_m", round(float(feat.perimeter_px) * abs(px_w), 2))
                         f.setAttribute("compactness", round(float(feat.compactness), 3))
                         f.setAttribute("orientation", round(float(feat.orientation_deg), 1))
+                        if hasattr(self, 'current_gazetteer_match') and self.current_gazetteer_match:
+                            f.setAttribute("settlement", self.current_gazetteer_match)
                         qgis_features.append(f)
                 except Exception:
                     pass
@@ -1239,6 +1415,9 @@ class TranchotDockWidget(QDockWidget):
             roi_geometry=layer_geom,
             layer_name=layer_name,
             output_crs=output_crs,
+            settlement_name=self.current_gazetteer_match if hasattr(self, 'current_gazetteer_match') else None,
+            settlement_type=self.current_type_match if hasattr(self, 'current_type_match') else None,
+            settlement_uri=self.current_type_uri if hasattr(self, 'current_type_uri') else None
         )
         self.current_task.task_completed.connect(self._on_task_completed)
         self.current_task.task_failed.connect(self._on_task_failed)
@@ -1360,6 +1539,77 @@ class TranchotDockWidget(QDockWidget):
         self.progress_bar.setValue(0)
         self.status_lbl.setText(f"Error: {error_msg}")
         QMessageBox.critical(self, "Classification Error", f"Land-use extraction failed:\n{error_msg}")
+
+    def _show_about_dialog(self):
+        QMessageBox.about(
+            self,
+            "HistMap Extractor (Tranchot)",
+            "<b>HistMap Extractor</b><br><br>"
+            "Bonn Center for Digital Humanities (BCDH)<br>"
+            "Rheinische Friedrich-Wilhelms-Universität Bonn<br><br>"
+            "Deep Learning based extraction of historical features from the Tranchot/v. Müffling maps (1801-1828)."
+        )
+
+    def _run_text_extraction(self):
+        layer = self.layer_combo.currentLayer()
+        if not layer or not isinstance(layer, QgsRasterLayer):
+            QMessageBox.warning(self, "No Raster Selected", "Please select a historical GeoTIFF first.")
+            return
+
+        raster_path = layer.dataProvider().dataSourceUri()
+        if not os.path.exists(raster_path):
+            QMessageBox.critical(self, "File Error", f"Raster file does not exist:\n{raster_path}")
+            return
+            
+        if self.current_roi is None or self.current_roi.isEmpty():
+            QMessageBox.information(
+                self,
+                "No Area Selected",
+                "Please draw a polygon using '📐 Draw Settlement Polygon' in the Buildings tab first."
+            )
+            return
+
+        if TextConfig is None or TextExtractionTask is None:
+            QMessageBox.critical(self, "Engine Error", "Tranchot backend not found or incompatible.")
+            return
+
+        layer_roi = self._transform_canvas_to_layer_rect(self.current_roi, layer)
+        layer_geom = self._transform_canvas_to_layer_geom(self.current_roi_geom, layer) if hasattr(self, 'current_roi_geom') and self.current_roi_geom is not None else None
+
+        config = TextConfig()
+        task = TextExtractionTask(
+            raster_path=raster_path,
+            config=config,
+            roi_extent=layer_roi,
+            roi_geometry=layer_geom,
+            layer_name="Tranchot_Toponyms",
+            output_crs=layer.crs().authid()
+        )
+        task.task_completed.connect(self._on_text_extraction_completed)
+        task.task_failed.connect(self._on_text_extraction_failed)
+
+        QgsApplication.taskManager().addTask(task)
+        self.status_lbl.setText("Running text & toponym extraction...")
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setStyleSheet("QProgressBar::chunk { background-color: #0277bd; }")
+
+    def _on_text_extraction_completed(self, layer_name: str, count: int):
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100)
+        self.progress_bar.setStyleSheet("")
+        self.status_lbl.setText(f"Text Extraction Finished! Extracted {count} labels.")
+        
+        if count > 0:
+            layer = QgsProject.instance().mapLayersByName(layer_name)
+            if layer:
+                self.iface.setActiveLayer(layer[0])
+
+    def _on_text_extraction_failed(self, error_msg: str):
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setStyleSheet("")
+        self.status_lbl.setText("Text extraction failed.")
+        QMessageBox.critical(self, "Extraction Error", f"Text extraction failed:\n{error_msg}")
 
 
     def _show_about_dialog(self):

@@ -47,10 +47,10 @@ for _candidate in _candidate_backend_dirs:
         if os.path.exists(os.path.join(_candidate, "tranchot_extractor")) or os.path.exists(os.path.join(_candidate, "config.py")):
             sys.path.insert(0, _candidate)
 
-from tranchot_extractor.config import BuildingConfig, LandUseConfig
+from tranchot_extractor.config import BuildingConfig, LandUseConfig, TextConfig
 from tranchot_extractor.extractors.building_extractor import BuildingExtractor, BuildingExtractionResult
 from tranchot_extractor.extractors.landuse_extractor import LandUseExtractor, LandUseExtractionResult
-
+from tranchot_extractor.extractors.text_extractor import TextExtractor, TextExtractionResult, ToponymFeature
 
 
 class BuildingExtractionTask(QgsTask):
@@ -69,6 +69,9 @@ class BuildingExtractionTask(QgsTask):
         roi_geometry: Optional[QgsGeometry] = None,
         layer_name: str = "Tranchot_Gebaeude",
         output_crs: str = "EPSG:25832",
+        settlement_name: Optional[str] = None,
+        settlement_type: Optional[str] = None,
+        settlement_uri: Optional[str] = None,
     ):
         super().__init__(f"Tranchot: Gebäude-Extraktion ({layer_name})", QgsTask.CanCancel)
         self.raster_path = raster_path
@@ -77,6 +80,9 @@ class BuildingExtractionTask(QgsTask):
         self.roi_geometry = roi_geometry
         self.layer_name = layer_name
         self.output_crs = output_crs
+        self.settlement_name = settlement_name
+        self.settlement_type = settlement_type
+        self.settlement_uri = settlement_uri
 
         # Results to pass from background thread to finished()
         self.extracted_features: List[Dict[str, Any]] = []
@@ -281,6 +287,8 @@ class BuildingExtractionTask(QgsTask):
                 QgsField("perimeter_m", QVariant.Double),
                 QgsField("compactness", QVariant.Double),
                 QgsField("orientation", QVariant.Double),
+                QgsField("settlement", QVariant.String),
+                QgsField("type_uri", QVariant.String),
             ]
             pr.addAttributes(fields)
             vl.updateFields()
@@ -303,11 +311,17 @@ class BuildingExtractionTask(QgsTask):
             geom = QgsGeometry.fromWkt(item["wkt"])
             f.setGeometry(geom)
             f.setAttribute("id", item["id"])
-            f.setAttribute("type", item["type"])
+            if self.settlement_type:
+                f.setAttribute("type", self.settlement_type)
+                f.setAttribute("type_uri", self.settlement_uri)
+            else:
+                f.setAttribute("type", item["type"])
             f.setAttribute("area_m2", item["area_m2"])
             f.setAttribute("perimeter_m", item["perimeter_m"])
             f.setAttribute("compactness", item["compactness"])
             f.setAttribute("orientation", item["orientation"])
+            if self.settlement_name:
+                f.setAttribute("settlement", self.settlement_name)
             qgis_features.append(f)
 
         pr.addFeatures(qgis_features)
@@ -601,3 +615,227 @@ class LandUseExtractionTask(QgsTask):
 
         self.task_completed.emit(self.layer_name, feature_count)
 
+
+class TextExtractionTask(QgsTask):
+    """
+    QgsTask for running text and toponym extraction in a background thread.
+    """
+
+    task_completed = pyqtSignal(str, int)  # (layer_name, feature_count)
+    task_failed = pyqtSignal(str)          # (error_message)
+
+    def __init__(
+        self,
+        raster_path: str,
+        config: TextConfig,
+        roi_extent: Optional[QgsRectangle] = None,
+        roi_geometry: Optional[QgsGeometry] = None,
+        layer_name: str = "Tranchot_Toponyms",
+        output_crs: str = "EPSG:25832",
+    ):
+        super().__init__(f"Tranchot: Text-Extraktion ({layer_name})", QgsTask.CanCancel)
+        self.raster_path = raster_path
+        self.config = config
+        self.roi_extent = roi_extent
+        self.roi_geometry = roi_geometry
+        self.layer_name = layer_name
+        self.output_crs = output_crs
+
+        self.extracted_features: List[Dict[str, Any]] = []
+        self.error_msg: Optional[str] = None
+        self.pixel_size_m: float = 1.0
+
+    def run(self) -> bool:
+        """Executed in background worker thread."""
+        try:
+            self.setProgress(5.0)
+            if self.isCanceled():
+                return False
+
+            if not os.path.exists(self.raster_path):
+                self.error_msg = f"Rasterdatei nicht gefunden: {self.raster_path}"
+                return False
+
+            ds = gdal.Open(self.raster_path, gdal.GA_ReadOnly)
+            if ds is None:
+                self.error_msg = f"GDAL konnte {self.raster_path} nicht öffnen."
+                return False
+
+            gt = ds.GetGeoTransform()
+            x_origin = gt[0]
+            px_w = gt[1]
+            y_origin = gt[3]
+            px_h = gt[5]
+
+            img_w = ds.RasterXSize
+            img_h = ds.RasterYSize
+            self.pixel_size_m = abs(px_w)
+
+            self.setProgress(15.0)
+            if self.isCanceled():
+                return False
+
+            if self.roi_geometry is not None and not self.roi_geometry.isEmpty():
+                extent = self.roi_geometry.boundingBox()
+            elif self.roi_extent is not None and not self.roi_extent.isEmpty():
+                extent = self.roi_extent
+            else:
+                extent = None
+
+            if extent is not None and not extent.isEmpty():
+                x0_px = int((extent.xMinimum() - x_origin) / px_w)
+                x1_px = int((extent.xMaximum() - x_origin) / px_w)
+                y0_px = int((extent.yMaximum() - y_origin) / px_h)
+                y1_px = int((extent.yMinimum() - y_origin) / px_h)
+
+                x_off = max(0, min(img_w - 1, min(x0_px, x1_px)))
+                y_off = max(0, min(img_h - 1, min(y0_px, y1_px)))
+                win_w = max(1, min(img_w - x_off, abs(x1_px - x0_px)))
+                win_h = max(1, min(img_h - y_off, abs(y1_px - y0_px)))
+            else:
+                x_off, y_off = 0, 0
+                win_w, win_h = img_w, img_h
+
+            sub_x_origin = x_origin + x_off * px_w
+            sub_y_origin = y_origin + y_off * px_h
+
+            self.setProgress(25.0)
+            if self.isCanceled():
+                return False
+
+            num_bands = ds.RasterCount
+            if num_bands >= 3:
+                r_band = ds.GetRasterBand(1).ReadAsArray(x_off, y_off, win_w, win_h)
+                g_band = ds.GetRasterBand(2).ReadAsArray(x_off, y_off, win_w, win_h)
+                b_band = ds.GetRasterBand(3).ReadAsArray(x_off, y_off, win_w, win_h)
+                image_rgb = np.dstack((r_band, g_band, b_band))
+            else:
+                gray_band = ds.GetRasterBand(1).ReadAsArray(x_off, y_off, win_w, win_h)
+                image_rgb = np.dstack((gray_band, gray_band, gray_band))
+
+            self.setProgress(40.0)
+            if self.isCanceled():
+                return False
+
+            # Use the already imported TextExtractor class to avoid import lock deadlocks in background thread
+            extractor = TextExtractor(config=self.config)
+            result: TextExtractionResult = extractor.extract(image_rgb=image_rgb)
+
+            self.setProgress(80.0)
+            if self.isCanceled():
+                return False
+
+            for feat in result.features:
+                poly = feat.geometry_polygon
+                if poly is None or poly.is_empty:
+                    continue
+                def transform_ring(coords):
+                    return [
+                        (sub_x_origin + pt[0] * px_w, sub_y_origin + pt[1] * px_h)
+                        for pt in coords
+                    ]
+                try:
+                    ext_geo = transform_ring(poly.exterior.coords)
+                    holes_geo = [transform_ring(interior.coords) for interior in poly.interiors]
+                    geo_poly = Polygon(ext_geo, holes_geo)
+
+                    if not geo_poly.is_valid:
+                        geo_poly = geo_poly.buffer(0)
+
+                    if geo_poly.is_valid and not geo_poly.is_empty:
+                        self.extracted_features.append({
+                            "id": feat.id,
+                            "wkt": geo_poly.wkt,
+                            "text": feat.text,
+                            "confidence": float(feat.confidence),
+                            "category": feat.category
+                        })
+                except Exception as e:
+                    QgsMessageLog.logMessage(f"Geometry transformation error: {e}", "HistMap", Qgis.Warning)
+
+            self.setProgress(100.0)
+            return True
+
+        except Exception as e:
+            self.error_msg = str(e)
+            QgsMessageLog.logMessage(f"HistMap Task Exception: {e}", "HistMap", Qgis.Critical)
+            return False
+
+    def finished(self, result: bool):
+        if not result or self.error_msg is not None:
+            self.task_failed.emit(self.error_msg or "Extraction canceled or failed.")
+            return
+
+        feature_count = len(self.extracted_features)
+
+        if feature_count == 0:
+            self.task_completed.emit(self.layer_name, 0)
+            return
+
+        existing_layers = QgsProject.instance().mapLayersByName(self.layer_name)
+        if existing_layers:
+            vl = existing_layers[0]
+            pr = vl.dataProvider()
+            if self.roi_extent is not None and not self.roi_extent.isEmpty():
+                roi_geom = QgsGeometry.fromRect(self.roi_extent)
+                to_delete = [f.id() for f in vl.getFeatures() if f.geometry().intersects(roi_geom)]
+                if to_delete:
+                    pr.deleteFeatures(to_delete)
+            else:
+                pr.deleteFeatures(vl.allFeatureIds())
+        else:
+            uri = f"Polygon?crs={self.output_crs}"
+            vl = QgsVectorLayer(uri, self.layer_name, "memory")
+            pr = vl.dataProvider()
+            fields = [
+                QgsField("id", QVariant.Int),
+                QgsField("text", QVariant.String),
+                QgsField("confidence", QVariant.Double),
+                QgsField("category", QVariant.String),
+            ]
+            pr.addAttributes(fields)
+            vl.updateFields()
+
+            symbol = QgsFillSymbol.createSimple({
+                'color': '100,200,100,100',
+                'color_border': '50,150,50,255',
+                'width_border': '0.35',
+                'style': 'solid',
+                'style_border': 'solid'
+            })
+            vl.setRenderer(QgsSingleSymbolRenderer(symbol))
+            
+            # Show labels on the map
+            pal_layer = QgsProject.instance().mapLayersByName(self.layer_name)
+            from qgis.core import QgsPalLayerSettings, QgsVectorLayerSimpleLabeling, QgsTextFormat
+            settings = QgsPalLayerSettings()
+            settings.fieldName = "text"
+            text_format = QgsTextFormat()
+            text_format.setSize(10)
+            settings.setFormat(text_format)
+            settings.placement = QgsPalLayerSettings.OverPoint
+            vl.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+            vl.setLabelsEnabled(True)
+
+            QgsProject.instance().addMapLayer(vl, False)
+            QgsProject.instance().layerTreeRoot().insertLayer(0, vl)
+
+        qgis_features = []
+        for item in self.extracted_features:
+            f = QgsFeature(vl.fields())
+            geom = QgsGeometry.fromWkt(item["wkt"])
+            f.setGeometry(geom)
+            f.setAttribute("id", item["id"])
+            f.setAttribute("text", item["text"])
+            f.setAttribute("confidence", item["confidence"])
+            f.setAttribute("category", item["category"])
+            qgis_features.append(f)
+
+        pr.addFeatures(qgis_features)
+        vl.updateExtents()
+        vl.triggerRepaint()
+        node = QgsProject.instance().layerTreeRoot().findLayer(vl.id())
+        if node and not node.isVisible():
+            node.setItemVisibilityChecked(True)
+
+        self.task_completed.emit(self.layer_name, feature_count)

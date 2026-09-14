@@ -63,7 +63,7 @@ class TranchotPlugin:
         if self.dockwidget is None:
             self.dockwidget = TranchotDockWidget(self.iface, self.iface.mainWindow())
             self.dockwidget.closingPlugin.connect(self._on_dockwidget_closed)
-            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dockwidget)
+            self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dockwidget)
 
         self.dockwidget.show()
         self.dockwidget.raise_()

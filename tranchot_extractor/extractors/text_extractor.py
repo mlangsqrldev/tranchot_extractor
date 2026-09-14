@@ -148,7 +148,7 @@ class TextExtractor:
             norm = np.clip((gray.astype(np.float32) / (bg.astype(np.float32) + 1e-5)) * 255, 0, 255).astype(np.uint8)
             _, binarized = cv2.threshold(norm, 215, 255, cv2.THRESH_BINARY)
 
-            raw_text = pytesseract.image_to_string(binarized, lang='deu', config='--psm 7 --oem 3').strip()
+            raw_text = pytesseract.image_to_string(binarized, lang='german_print_14+GT4HistOCR+deu', config='--psm 7 --oem 3').strip()
 
             clean_chars = "".join(c for c in raw_text if c.isalnum() or c in "-äöüÄÖÜß")
             if len(clean_chars) >= 2:
@@ -161,12 +161,58 @@ class TextExtractor:
 
     def extract(self, image_rgb: np.ndarray) -> TextExtractionResult:
         """
-        Full sheet extraction placeholder.
+        Extracts text from the image using pytesseract bounding boxes.
         """
         h, w = image_rgb.shape[:2]
+        features = []
+        
+        if HAS_PYTESSERACT:
+            try:
+                gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+                bg = cv2.GaussianBlur(gray, (35, 35), 0)
+                norm = np.clip((gray.astype(np.float32) / (bg.astype(np.float32) + 1e-5)) * 255, 0, 255).astype(np.uint8)
+                _, binarized = cv2.threshold(norm, 215, 255, cv2.THRESH_BINARY)
+
+                # Use PSM 11 (Sparse text) to find text across the image
+                data = pytesseract.image_to_data(binarized, lang='german_print_14+GT4HistOCR+deu', config='--psm 11', output_type=pytesseract.Output.DICT)
+                
+                for i in range(len(data['text'])):
+                    raw_text = data['text'][i].strip()
+                    conf = float(data['conf'][i])
+                    
+                    if conf > 10 and len(raw_text) >= 2:
+                        clean_chars = "".join(c for c in raw_text if c.isalnum() or c in "-äöüÄÖÜß")
+                        if len(clean_chars) >= 2:
+                            matched, category = self.match_gazetteer(clean_chars)
+                            if matched:
+                                x, y, bw, bh = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
+                                
+                                # Build a rectangular polygon
+                                p1 = (x, y)
+                                p2 = (x + bw, y)
+                                p3 = (x + bw, y + bh)
+                                p4 = (x, y + bh)
+                                poly = Polygon([p1, p2, p3, p4, p1])
+                                pt = Point(x + bw/2, y + bh/2)
+                                
+                                feat = ToponymFeature(
+                                    id=len(features) + 1,
+                                    text=matched,
+                                    confidence=conf,
+                                    category=category,
+                                    bounding_box=[[x, y], [x+bw, y+bh]],
+                                    centroid_x=pt.x,
+                                    centroid_y=pt.y,
+                                    geometry_point=pt,
+                                    geometry_polygon=poly
+                                )
+                                features.append(feat)
+            except Exception as e:
+                print(f"OCR Error: {e}")
+
         return TextExtractionResult(
-            features=[],
+            features=features,
             mask=np.zeros((h, w), dtype=np.uint8),
             dilated_mask=np.zeros((h, w), dtype=np.uint8),
-            gdf=gpd.GeoDataFrame(geometry=[]),
+            gdf=gpd.GeoDataFrame(geometry=[f.geometry_polygon for f in features]) if features else gpd.GeoDataFrame(geometry=[]),
         )

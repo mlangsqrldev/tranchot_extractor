@@ -164,10 +164,7 @@ class BoundaryExtractor:
             })
             geoms.append(line)
 
-        try:
-            gdf = gpd.GeoDataFrame(records, geometry=geoms) if geoms else gpd.GeoDataFrame(geometry=[])
-        except Exception:
-            gdf = None
+        gdf = gpd.GeoDataFrame(records, geometry=geoms, crs="EPSG:25832") if geoms else gpd.GeoDataFrame(geometry=[], crs="EPSG:25832")
 
         return BoundaryExtractionResult(
             features=features,

@@ -1,0 +1,16 @@
+[general]
+name=HistMap Extractor
+qgisMinimumVersion=3.28
+description=AI & Computer Vision feature extraction and vectorization for historical maps (18th-20th century)
+about=Automated extraction of historical building footprints with preserved interior courtyards, land-use classification, toponyms, and road networks from historical cartographic sheets. Developed by the Bonn Center for Digital Humanities (BCDH), University of Bonn.
+version=1.1.0
+author=Bonn Center for Digital Humanities (BCDH)
+email=info@bcdh.uni-bonn.de
+category=Raster
+tags=history, cartography, vectorization, historical maps, buildings, courtyards, segmentation, digital humanities, bcdh
+homepage=https://github.com/mlangsqrldev/tranchot_extractor
+tracker=https://github.com/mlangsqrldev/tranchot_extractor/issues
+repository=https://github.com/mlangsqrldev/tranchot_extractor
+icon=resources/icon.png
+experimental=False
+deprecated=False

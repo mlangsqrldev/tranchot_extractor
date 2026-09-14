@@ -205,10 +205,7 @@ class RoadExtractor:
             pts = np.array(f.geometry.coords, dtype=np.int32)
             cv2.polylines(skel_mask, [pts], False, 255, 1)
 
-        try:
-            gdf = gpd.GeoDataFrame(records, geometry=geoms) if geoms else gpd.GeoDataFrame(geometry=[])
-        except Exception:
-            gdf = None
+        gdf = gpd.GeoDataFrame(records, geometry=geoms, crs="EPSG:25832") if geoms else gpd.GeoDataFrame(geometry=[], crs="EPSG:25832")
 
         return RoadExtractionResult(
             features=features,

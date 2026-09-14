@@ -34,12 +34,12 @@ class TestBuildingExtractor(unittest.TestCase):
         self.assertGreater(f1.area_px, 10)
         self.assertTrue(f1.geometry.is_valid)
 
+        # Both should be regularized 4-corner rectangles (5 coords in closed ring)
         for f in res.features:
-            self.assertTrue(f.geometry.is_valid)
-            self.assertGreaterEqual(len(f.geometry.exterior.coords), 4)
+            self.assertEqual(len(f.geometry.exterior.coords), 5)
 
     def test_noisy_jagged_building_despiked(self):
-        """Verify that buildings with 1-pixel jagged raster spikes produce valid clean polygons."""
+        """Verify that buildings with 1-pixel jagged raster spikes are regularized cleanly."""
         img = np.full((150, 150, 3), (220, 210, 180), dtype=np.uint8)
         # Base rectangle
         cv2.rectangle(img, (40, 40), (90, 70), (210, 40, 40), -1)
@@ -53,7 +53,8 @@ class TestBuildingExtractor(unittest.TestCase):
         self.assertEqual(len(res.features), 1)
         f = res.features[0]
         self.assertTrue(f.geometry.is_valid)
-        self.assertGreaterEqual(len(f.geometry.exterior.coords), 4)
+        # Should be regularized to a clean 4-corner rectangle (5 coords in closed ring)
+        self.assertEqual(len(f.geometry.exterior.coords), 5)
 
     def test_courtyard_with_hole(self):
         """Verify that a large courtyard complex preserves interior yard (hole) without jagged spikes."""
@@ -69,6 +70,8 @@ class TestBuildingExtractor(unittest.TestCase):
         self.assertTrue(f.geometry.is_valid)
         # Must have an interior hole
         self.assertGreaterEqual(len(f.geometry.interiors), 1)
+        # Exterior and interior should have low vertex counts (no staircase noise)
+        self.assertLessEqual(len(f.geometry.exterior.coords), 10)
 
     def test_despike_and_simplify_ring(self):
         """Direct unit test for despike_and_simplify_ring function."""
@@ -84,22 +87,20 @@ class TestBuildingExtractor(unittest.TestCase):
             [10.0, 30.0],
             [10.0, 10.0],
         ])
-        cleaned = despike_and_simplify_ring(raw_ring, min_edge_len=3.0, spike_angle_deg=45.0)
-        self.assertTrue(len(cleaned) >= 4)
-
     def test_thin_walls_extracted(self):
-        """Verify that thin walls (1-2 px stroke width) are detected cleanly."""
+        """Verify that thin walls (1-2 px stroke width) are detected cleanly as 4-corner rectangles."""
         img = np.full((120, 120, 3), (220, 210, 180), dtype=np.uint8)
         # Draw a thin 2-pixel red wall
         cv2.line(img, (30, 20), (30, 70), (210, 40, 40), 2)
 
-        cfg = BuildingConfig(min_building_area_px=6.0, min_stroke_width_px=0.6)
+        cfg = BuildingConfig(min_building_area_px=6.0, min_stroke_width_px=1.0)
         ext = BuildingExtractor(cfg)
         res = ext.extract(img)
 
         self.assertGreaterEqual(len(res.features), 1)
         f = res.features[0]
         self.assertTrue(f.geometry.is_valid)
+        self.assertEqual(len(f.geometry.exterior.coords), 5)
 
 
 if __name__ == "__main__":

@@ -65,9 +65,11 @@ from qgis.core import (
     QgsMarkerSymbol,
     QgsDistanceArea,
     QgsPointXY,
+    QgsRendererCategory,
+    QgsCategorizedSymbolRenderer,
 )
 
-from .map_tools import PolygonRoiMapTool, RoiExtentMapTool, PipetteMapTool, GazetteerPickMapTool
+from .map_tools import PolygonRoiMapTool, RoiExtentMapTool, PipetteMapTool, GazetteerPickMapTool, LandUseStampMapTool
 from .tasks import BuildingExtractionTask, LandUseExtractionTask, TextExtractionTask
 
 
@@ -93,6 +95,7 @@ try:
     from tranchot_extractor.extractors.building_extractor import BuildingExtractor
     from tranchot_extractor.preprocessing.color_enhancer import ColorEnhancer
     from tranchot_extractor.extractors.text_extractor import TextExtractor
+    from tranchot_extractor.extractors.pipette_sampler import PipetteSampler, ColorSample, StampEntry
 except Exception:
     BuildingConfig = None
     RoadConfig = None
@@ -101,6 +104,9 @@ except Exception:
     BuildingExtractor = None
     ColorEnhancer = None
     TextExtractor = None
+    PipetteSampler = None
+    ColorSample = None
+    StampEntry = None
 
 
 class TranchotDockWidget(QDockWidget):
@@ -139,6 +145,21 @@ class TranchotDockWidget(QDockWidget):
         self.preview_timer.setSingleShot(True)
         self.preview_timer.setInterval(150)
         self.preview_timer.timeout.connect(self._update_live_preview)
+
+        # Land Use states & multi-stamp sampler
+        self.pipette_sampler = PipetteSampler() if PipetteSampler else None
+        self.current_lu_roi: Optional[QgsRectangle] = None
+        self.current_lu_roi_geom: Optional[QgsGeometry] = None
+        self.cached_lu_roi_rgb = None
+        self.cached_lu_sub_origin = (0.0, 0.0)
+        self.cached_lu_px_size = (1.0, 1.0)
+        self.lu_roi_rubber_band: Optional[QgsRubberBand] = None
+        self.lu_stamp_rubber_bands: List[Tuple[str, QgsRubberBand]] = []
+
+        self.lu_preview_timer = QTimer(self)
+        self.lu_preview_timer.setSingleShot(True)
+        self.lu_preview_timer.setInterval(200)
+        self.lu_preview_timer.timeout.connect(self._update_lu_live_preview)
 
         self._init_ui()
         self._init_map_tools()
@@ -543,72 +564,204 @@ class TranchotDockWidget(QDockWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(8)
 
-        # 1. Interactive Pipette Tool
-        pip_group = QGroupBox("Interactive Color Pipette")
+        # 1. Dedicated Land Use ROI
+        roi_group = QGroupBox("A. Untersuchungsgebiet (Land Use Area)")
+        roi_layout = QVBoxLayout(roi_group)
+
+        btn_box = QHBoxLayout()
+        self.btn_lu_roi = QPushButton("📐 Landnutzungs-Polygon einzeichnen")
+        self.btn_lu_roi.setToolTip("Klicke punktweise auf die Karte, um ein beliebiges Polygon für die Landnutzung zu zeichnen (Rechtsklick/Doppelklick zum Abschließen).")
+        self.btn_lu_roi.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
+        self.btn_lu_roi.clicked.connect(self._activate_lu_roi_tool)
+        btn_box.addWidget(self.btn_lu_roi)
+
+        self.btn_clear_lu_roi = QPushButton("❌ Reset")
+        self.btn_clear_lu_roi.setToolTip("Untersuchungsgebiet zurücksetzen")
+        self.btn_clear_lu_roi.clicked.connect(self._clear_lu_roi)
+        btn_box.addWidget(self.btn_clear_lu_roi)
+        roi_layout.addLayout(btn_box)
+
+        # Scope Radio Buttons
+        scope_box = QHBoxLayout()
+        self.rb_lu_roi = QRadioButton("Gezeichnetes Gebiet (ROI)", checked=True)
+        self.rb_lu_sheet = QRadioButton("Gesamtblatt")
+        self.rb_lu_roi.toggled.connect(self._trigger_lu_preview_update)
+        self.rb_lu_sheet.toggled.connect(self._trigger_lu_preview_update)
+        scope_box.addWidget(self.rb_lu_roi)
+        scope_box.addWidget(self.rb_lu_sheet)
+        roi_layout.addLayout(scope_box)
+
+        self.lu_roi_info_lbl = QLabel("Untersuchungsgebiet: Noch kein Polygon gezeichnet (oben einzeichnen oder Gesamtblatt wählen)")
+        self.lu_roi_info_lbl.setStyleSheet("color: #888888; font-size: 10px;")
+        roi_layout.addWidget(self.lu_roi_info_lbl)
+        layout.addWidget(roi_group)
+
+        # 2. Multi-Nuance Pipette Sampler
+        pip_group = QGroupBox("B. Farbmuster-Sampling (Mehrere Nuancen)")
         pip_layout = QVBoxLayout(pip_group)
 
-        self.btn_pipette = QPushButton("🎯 Activate Pipette (Click on map)")
-        self.btn_pipette.setToolTip("Click on the map canvas to inspect pixel RGB values and sample colors.")
-        self.btn_pipette.clicked.connect(self._activate_pipette_tool)
-        pip_layout.addWidget(self.btn_pipette)
+        row_class = QHBoxLayout()
+        row_class.addWidget(QLabel("Ziel-Klasse:"))
+        self.combo_lu_sample_class = QComboBox()
+        self.combo_lu_sample_class.addItem("🌲 Wald (Forest)", "forest")
+        self.combo_lu_sample_class.addItem("🌱 Wiese & Weiden (Meadow)", "meadow")
+        self.combo_lu_sample_class.addItem("💧 Gewässer (Water)", "water")
+        self.combo_lu_sample_class.addItem("🏡 Gärten & Baumgärten (Garden)", "garden")
+        self.combo_lu_sample_class.addItem("🍇 Weinberge & Hänge (Vineyard)", "vineyard")
+        self.combo_lu_sample_class.addItem("🏖️ Kies- & Sandbänke (Gravel)", "gravel")
+        row_class.addWidget(self.combo_lu_sample_class, 1)
+        pip_layout.addLayout(row_class)
 
-        self.pip_status_lbl = QLabel("No sample picked.")
-        self.pip_status_lbl.setStyleSheet("color: #888888; font-size: 10px;")
-        pip_layout.addWidget(self.pip_status_lbl)
+        # Radius slider for sampling
+        row_rad = QHBoxLayout()
+        row_rad.addWidget(QLabel("Stempel-Radius (px):"))
+        self.spin_stamp_radius = QSpinBox()
+        self.spin_stamp_radius.setRange(4, 80)
+        self.spin_stamp_radius.setValue(20)
+        self.slider_stamp_radius = QSlider(Qt.Orientation.Horizontal)
+        self.slider_stamp_radius.setRange(4, 80)
+        self.slider_stamp_radius.setValue(20)
+        self.slider_stamp_radius.valueChanged.connect(self.spin_stamp_radius.setValue)
+        self.spin_stamp_radius.valueChanged.connect(self.slider_stamp_radius.setValue)
+        row_rad.addWidget(self.slider_stamp_radius, 1)
+        row_rad.addWidget(self.spin_stamp_radius)
+        pip_layout.addLayout(row_rad)
+
+        self.btn_lu_sample_stamp = QPushButton("🎯 Farbmuster auf Karte aufnehmen")
+        self.btn_lu_sample_stamp.setToolTip("Klicke auf die Karte, um Farbmuster für die gewählte Klasse zu lernen. Mehrere Klicks erfassen mehrere Nuancen (Rechtsklick/Esc zum Beenden).")
+        self.btn_lu_sample_stamp.setStyleSheet("background-color: #e65100; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
+        self.btn_lu_sample_stamp.clicked.connect(self._activate_lu_stamp_tool)
+        pip_layout.addWidget(self.btn_lu_sample_stamp)
+
+        self.lbl_lu_stamps_summary = QLabel("0 Nuancen gesampelt (Standard-Farbprofile aktiv)")
+        self.lbl_lu_stamps_summary.setStyleSheet("color: #888888; font-size: 10px;")
+        pip_layout.addWidget(self.lbl_lu_stamps_summary)
+
+        btn_clear_box = QHBoxLayout()
+        self.btn_clear_class_stamps = QPushButton("🗑️ Nuancen d. Klasse leeren")
+        self.btn_clear_class_stamps.setToolTip("Löscht die gelernten Stempel/Nuancen für die aktuell gewählte Klasse.")
+        self.btn_clear_class_stamps.clicked.connect(self._clear_class_stamps)
+        btn_clear_box.addWidget(self.btn_clear_class_stamps)
+
+        self.btn_reset_all_stamps = QPushButton("🔄 Alle zurücksetzen")
+        self.btn_reset_all_stamps.setToolTip("Setzt alle Farbprofile aller Klassen auf die historischen Standardwerte zurück.")
+        self.btn_reset_all_stamps.clicked.connect(self._reset_all_stamps)
+        btn_clear_box.addWidget(self.btn_reset_all_stamps)
+        pip_layout.addLayout(btn_clear_box)
         layout.addWidget(pip_group)
 
-        # 2. Scope Selection
-        scope_group = QGroupBox("Analysis Scope")
-        scope_layout = QVBoxLayout(scope_group)
-        self.rb_lu_roi = QRadioButton("Selected Settlement / ROI Polygon", checked=True)
-        self.rb_lu_roi.setToolTip("Restricts land-use classification strictly to the active settlement ROI polygon.")
-        self.rb_lu_sheet = QRadioButton("Full Map Sheet Extent")
-        self.rb_lu_sheet.setToolTip("Classifies the entire historical GeoTIFF map sheet.")
-        scope_layout.addWidget(self.rb_lu_roi)
-        scope_layout.addWidget(self.rb_lu_sheet)
-        layout.addWidget(scope_group)
+        # 3. Live Sliders & Parameters
+        param_group = QGroupBox("C. Farbtoleranz & Klassifikations-Regler")
+        param_layout = QVBoxLayout(param_group)
+        param_layout.setSpacing(8)
 
-        # 3. Category Configuration
-        lu_group = QGroupBox("Land-Use Classes to Extract")
-        lu_layout = QVBoxLayout(lu_group)
-        
-        self.chk_lu_forest = QCheckBox("🌲 Forest (Wald - Olive-green & canopy texture)")
+        def add_lu_slider(layout, label, tooltip, min_v, max_v, step, def_v, scale=1.0, decimals=0):
+            row = QVBoxLayout()
+            h_layout = QHBoxLayout()
+            lbl = QLabel(f"<b>{label}</b>")
+            lbl.setToolTip(tooltip)
+            h_layout.addWidget(lbl)
+            h_layout.addStretch(1)
+
+            if decimals > 0:
+                sp = QDoubleSpinBox()
+                sp.setDecimals(decimals)
+            else:
+                sp = QSpinBox()
+            sp.setRange(min_v, max_v)
+            sp.setSingleStep(step)
+            sp.setValue(def_v)
+            sp.setFixedWidth(75)
+            h_layout.addWidget(sp)
+            row.addLayout(h_layout)
+
+            sl = QSlider(Qt.Orientation.Horizontal)
+            sl.setRange(int(round(min_v * scale)), int(round(max_v * scale)))
+            sl.setValue(int(round(def_v * scale)))
+            sl.setStyleSheet("QSlider::groove:horizontal { height: 4px; background: #444; border-radius: 2px; } "
+                             "QSlider::handle:horizontal { width: 14px; margin-top: -5px; margin-bottom: -5px; "
+                             "background: #2e7d32; border-radius: 7px; }")
+
+            def on_sl_change(val):
+                sp.blockSignals(True)
+                sp.setValue(val / scale if decimals > 0 else int(round(val / scale)))
+                sp.blockSignals(False)
+
+            def on_sp_change(val):
+                sl.blockSignals(True)
+                sl.setValue(int(round(val * scale)))
+                sl.blockSignals(False)
+
+            sl.valueChanged.connect(on_sl_change)
+            sp.valueChanged.connect(on_sp_change)
+            sl.valueChanged.connect(self._trigger_lu_preview_update)
+            sp.valueChanged.connect(self._trigger_lu_preview_update)
+            row.addWidget(sl)
+            layout.addLayout(row)
+            return sp, sl
+
+        tt_tol = "<h3>Farbtoleranz / Sensitivität (CIE-Lab ΔE)</h3><p>Steuert den Akzeptanzradius im Farbraum. Höhere Werte (30–60) fassen breitere Farbvariationen zusammen, niedrigere Werte (10–25) sind strenger.</p>"
+        self.spin_lu_tol, self.slider_lu_tol = add_lu_slider(
+            param_layout, "🎨 Farbtoleranz (CIE-Lab ΔE):", tt_tol,
+            min_v=10, max_v=80, step=1, def_v=24
+        )
+
+        tt_area = "<h3>Mindestfläche (px)</h3><p>Filtert isolierte Einzelflecken und Rauschen unterhalb dieser Flächengröße heraus.</p>"
+        self.spin_lu_min_area, self.slider_lu_min_area = add_lu_slider(
+            param_layout, "📐 Mindestfläche (px):", tt_area,
+            min_v=20, max_v=1500, step=10, def_v=150
+        )
+
+        tt_tex = "<h3>Textur-Gewichtung (Baumkronen / Schraffur)</h3><p>Gewichtet die Texturvarianz. Höher (1.0–2.0) betont eingestochene Baumkronen im Wald, niedriger (0.0–0.5) reagiert primär auf reine Farblasuren.</p>"
+        self.spin_lu_tex_w, self.slider_lu_tex_w = add_lu_slider(
+            param_layout, "🌿 Textur-Filter:", tt_tex,
+            min_v=0.0, max_v=2.5, step=0.1, def_v=0.8, scale=10.0, decimals=1
+        )
+
+        self.chk_lu_live_preview = QCheckBox("⚡ Live Preview (sofortige Reaktion auf Schieberegler)")
+        self.chk_lu_live_preview.setChecked(True)
+        self.chk_lu_live_preview.toggled.connect(self._on_lu_live_preview_toggled)
+        param_layout.addWidget(self.chk_lu_live_preview)
+        layout.addWidget(param_group)
+
+        # 4. Categories & Final Vectorization
+        cat_group = QGroupBox("D. Kategorien & Vektorisierung")
+        cat_layout = QVBoxLayout(cat_group)
+        self.chk_lu_forest = QCheckBox("🌲 Wald (Forest - Olivgrün & Kronentextur)")
         self.chk_lu_forest.setChecked(True)
-        self.chk_lu_forest.setToolTip("Extracts contiguous forest tracts using green chromatic excess and canopy engraving variance.")
-        lu_layout.addWidget(self.chk_lu_forest)
+        self.chk_lu_forest.toggled.connect(self._trigger_lu_preview_update)
+        cat_layout.addWidget(self.chk_lu_forest)
 
-        self.chk_lu_meadow = QCheckBox("🌱 Meadow (Wiesen/Weiden - Alluvial valley wash)")
+        self.chk_lu_meadow = QCheckBox("🌱 Wiese & Weiden (Meadow - Cyan-/Grünlasur)")
         self.chk_lu_meadow.setChecked(True)
-        self.chk_lu_meadow.setToolTip("Extracts alluvial valley meadows via cyan-pastel wash minus buffered stream network.")
-        lu_layout.addWidget(self.chk_lu_meadow)
+        self.chk_lu_meadow.toggled.connect(self._trigger_lu_preview_update)
+        cat_layout.addWidget(self.chk_lu_meadow)
 
-        self.chk_lu_water = QCheckBox("💧 Water Bodies (Gewässer/Bäche/Teiche/Gräben)")
+        self.chk_lu_water = QCheckBox("💧 Gewässer (Water - Bäche, Flüsse, Teiche)")
         self.chk_lu_water.setChecked(True)
-        self.chk_lu_water.setToolTip("Extracts linear stream channels, mill canals, town moats, and standing water bodies.")
-        lu_layout.addWidget(self.chk_lu_water)
+        self.chk_lu_water.toggled.connect(self._trigger_lu_preview_update)
+        cat_layout.addWidget(self.chk_lu_water)
 
-        self.chk_lu_garden = QCheckBox("🏡 Gardens & Orchards (Gärten/Baumgärten)")
+        self.chk_lu_garden = QCheckBox("🏡 Gärten & Nutzkulturen (Garden)")
         self.chk_lu_garden.setChecked(True)
-        self.chk_lu_garden.setToolTip("Extracts soft green garden plots and orchards surrounding settlement cores.")
-        lu_layout.addWidget(self.chk_lu_garden)
+        self.chk_lu_garden.toggled.connect(self._trigger_lu_preview_update)
+        cat_layout.addWidget(self.chk_lu_garden)
 
-        self.chk_lu_vineyard = QCheckBox("🍇 Vineyards / Arable (Weinberge/Ackerland)")
+        self.chk_lu_vineyard = QCheckBox("🍇 Weinberge & Hänge (Vineyard)")
         self.chk_lu_vineyard.setChecked(True)
-        self.chk_lu_vineyard.setToolTip("Extracts warm ochre/brown slope parcels and terraced vineyards.")
-        lu_layout.addWidget(self.chk_lu_vineyard)
+        self.chk_lu_vineyard.toggled.connect(self._trigger_lu_preview_update)
+        cat_layout.addWidget(self.chk_lu_vineyard)
 
-        layout.addWidget(lu_group)
+        self.chk_lu_gravel = QCheckBox("🏖️ Kies- & Sandbänke (Gravel)")
+        self.chk_lu_gravel.setChecked(False)
+        self.chk_lu_gravel.toggled.connect(self._trigger_lu_preview_update)
+        cat_layout.addWidget(self.chk_lu_gravel)
+        layout.addWidget(cat_group)
 
-        # 4. Action Button
-        self.btn_extract_landuse = QPushButton("🌲 Classify & Vectorize Land Use")
-        self.btn_extract_landuse.setToolTip(
-            "Launches land-use classification. The resulting categorized vector layer "
-            "is automatically added to QGIS with distinct historical map colors."
-        )
-        self.btn_extract_landuse.setStyleSheet(
-            "background-color: #2e7d32; color: white; font-weight: bold; padding: 8px; border-radius: 4px;"
-        )
+        self.btn_extract_landuse = QPushButton("🌲 Landnutzung berechnen & speichern")
+        self.btn_extract_landuse.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 8px; border-radius: 4px;")
         self.btn_extract_landuse.clicked.connect(self._run_landuse_extraction)
         layout.addWidget(self.btn_extract_landuse)
 
@@ -714,6 +867,9 @@ class TranchotDockWidget(QDockWidget):
         self.pipette_tool = PipetteMapTool(self.canvas, on_sample_callback=self._on_pipette_sampled)
         self.gazetteer_pick_tool = GazetteerPickMapTool(self.canvas, on_pick_callback=self._on_gazetteer_point_picked)
         self.gazetteer_pick_tool.canceled.connect(self._cancel_gazetteer_picker)
+        self.lu_roi_tool = PolygonRoiMapTool(self.canvas, on_polygon_callback=self._on_lu_polygon_roi_selected)
+        self.lu_stamp_tool = LandUseStampMapTool(self.canvas, on_stamp_callback=self._on_lu_stamp_sampled)
+        self.lu_stamp_tool.finished.connect(self._finish_lu_stamp_sampling)
 
     def _activate_roi_tool(self):
         """Switches QGIS map tool to irregular polygon drawing mode."""
@@ -1993,6 +2149,459 @@ class TranchotDockWidget(QDockWidget):
         self.status_lbl.setText(f"Error: {error_msg}")
         QMessageBox.critical(self, "Extraction Error", f"Building extraction failed:\n{error_msg}")
 
+    # -------------------------------------------------------------------------
+    # Land Use Methods: Dedicated ROI, Multi-Nuance Sampling & Live Preview
+    # -------------------------------------------------------------------------
+    def _activate_lu_roi_tool(self):
+        """Switches QGIS map tool to Land Use polygon drawing mode."""
+        self.canvas.setMapTool(self.lu_roi_tool)
+        self.status_lbl.setText("Landnutzungs-Gebiet zeichnen (Rechtsklick / Doppelklick zum Abschließen)...")
+        self.btn_lu_roi.setStyleSheet("background-color: #ff9800; color: black; font-weight: bold; padding: 6px; border-radius: 4px;")
+
+    def _on_lu_polygon_roi_selected(self, geom: QgsGeometry):
+        """Callback when user finishes drawing a Land Use ROI polygon."""
+        if geom is None or geom.isEmpty():
+            return
+        self.current_lu_roi_geom = geom
+        self.current_lu_roi = geom.boundingBox()
+        ha = geom.area() / 10000.0
+        self.lu_roi_info_lbl.setText(
+            f"Landnutzungs-Gebiet: Fläche ≈ {geom.area():.0f} m² ({ha:.2f} ha)"
+        )
+        self.lu_roi_info_lbl.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 10px;")
+        self.btn_lu_roi.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
+
+        # Display persistent ROI polygon on map canvas (emerald green dashed border, transparent interior)
+        if not hasattr(self, 'lu_roi_rubber_band') or self.lu_roi_rubber_band is None:
+            self.lu_roi_rubber_band = QgsRubberBand(self.canvas, QgsWkbTypes.PolygonGeometry)
+        self.lu_roi_rubber_band.setFillColor(QColor(0, 0, 0, 0))
+        self.lu_roi_rubber_band.setStrokeColor(QColor(46, 125, 50, 240))
+        self.lu_roi_rubber_band.setWidth(2)
+        self.lu_roi_rubber_band.setLineStyle(Qt.PenStyle.DashLine)
+        self.lu_roi_rubber_band.setToGeometry(geom, None)
+        self.lu_roi_rubber_band.show()
+
+        # Cache raster data for fast live slider updates
+        self._cache_lu_roi_data()
+
+        # Trigger live preview
+        if hasattr(self, 'chk_lu_live_preview') and self.chk_lu_live_preview.isChecked():
+            self._trigger_lu_preview_update()
+
+        # Reset map tool back to pan/navigation
+        if self.canvas.mapTool() == self.lu_roi_tool:
+            self.canvas.unsetMapTool(self.lu_roi_tool)
+
+    def _clear_lu_roi(self):
+        """Clears active Land Use ROI, cached data, and preview layers."""
+        self.current_lu_roi = None
+        self.current_lu_roi_geom = None
+        self.cached_lu_roi_rgb = None
+        if hasattr(self, 'lu_roi_rubber_band') and self.lu_roi_rubber_band:
+            self.lu_roi_rubber_band.reset(QgsWkbTypes.PolygonGeometry)
+            self.lu_roi_rubber_band.hide()
+        if hasattr(self, 'lu_roi_tool') and self.lu_roi_tool:
+            self.lu_roi_tool.reset()
+        if hasattr(self, 'lu_roi_info_lbl'):
+            self.lu_roi_info_lbl.setText("Untersuchungsgebiet: Noch kein Polygon gezeichnet")
+            self.lu_roi_info_lbl.setStyleSheet("color: #888888; font-size: 10px;")
+        if hasattr(self, 'btn_lu_roi'):
+            self.btn_lu_roi.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
+
+        # Remove preview vector layer if present
+        for l in QgsProject.instance().mapLayersByName("🔍 Land Use (Live Preview)"):
+            QgsProject.instance().removeMapLayer(l.id())
+
+        self.status_lbl.setText("Landnutzungs-Gebiet zurückgesetzt.")
+        self.canvas.refresh()
+
+    def _cache_lu_roi_data(self):
+        """Caches raster cutout for Land Use ROI to enable real-time slider updates."""
+        layer = self.layer_combo.currentLayer()
+        if not layer or not isinstance(layer, QgsRasterLayer):
+            return
+
+        raster_path = layer.dataProvider().dataSourceUri()
+        if not os.path.exists(raster_path):
+            return
+
+        if self.rb_lu_roi.isChecked() and self.current_lu_roi is not None and not self.current_lu_roi.isEmpty():
+            extent = self.current_lu_roi
+        else:
+            extent = layer.extent()
+
+        layer_roi = self._transform_canvas_to_layer_rect(extent, layer)
+        ds = gdal.Open(raster_path, gdal.GA_ReadOnly)
+        if ds is None:
+            return
+
+        gt = ds.GetGeoTransform()
+        x_origin, px_w, _, y_origin, _, px_h = gt[0], gt[1], gt[2], gt[3], gt[4], gt[5]
+        img_w, img_h = ds.RasterXSize, ds.RasterYSize
+
+        x0_px = int((layer_roi.xMinimum() - x_origin) / px_w)
+        x1_px = int((layer_roi.xMaximum() - x_origin) / px_w)
+        y0_px = int((layer_roi.yMaximum() - y_origin) / px_h)
+        y1_px = int((layer_roi.yMinimum() - y_origin) / px_h)
+
+        x_off = max(0, min(img_w - 1, min(x0_px, x1_px)))
+        y_off = max(0, min(img_h - 1, min(y0_px, y1_px)))
+        win_w = max(1, min(img_w - x_off, abs(x1_px - x0_px)))
+        win_h = max(1, min(img_h - y_off, abs(y1_px - y0_px)))
+
+        # Limit cache size for speed (e.g. max 2400)
+        max_dim = max(win_w, win_h)
+        buf_w, buf_h = win_w, win_h
+        if max_dim > 2400:
+            scale = 2400.0 / max_dim
+            buf_w = int(win_w * scale)
+            buf_h = int(win_h * scale)
+
+        r_band = ds.GetRasterBand(1).ReadAsArray(x_off, y_off, win_w, win_h, buf_xsize=buf_w, buf_ysize=buf_h)
+        g_band = ds.GetRasterBand(2).ReadAsArray(x_off, y_off, win_w, win_h, buf_xsize=buf_w, buf_ysize=buf_h)
+        b_band = ds.GetRasterBand(3).ReadAsArray(x_off, y_off, win_w, win_h, buf_xsize=buf_w, buf_ysize=buf_h)
+        ds = None
+
+        if r_band is not None and g_band is not None and b_band is not None:
+            self.cached_lu_roi_rgb = np.dstack((r_band, g_band, b_band))
+            eff_px_w = px_w * (float(win_w) / float(buf_w))
+            eff_px_h = px_h * (float(win_h) / float(buf_h))
+            self.cached_lu_sub_origin = (x_origin + x_off * px_w, y_origin + y_off * px_h)
+            self.cached_lu_px_size = (eff_px_w, eff_px_h)
+
+    def _activate_lu_stamp_tool(self):
+        """Activates multi-stamp pipette tool for land use nuances."""
+        if hasattr(self, 'lu_stamp_tool') and self.canvas.mapTool() == self.lu_stamp_tool:
+            self._finish_lu_stamp_sampling()
+            return
+
+        if hasattr(self, 'lu_stamp_tool'):
+            self.canvas.setMapTool(self.lu_stamp_tool)
+            self.btn_lu_sample_stamp.setStyleSheet("background-color: #ff9800; color: black; font-weight: bold; padding: 6px; border-radius: 4px;")
+            self.btn_lu_sample_stamp.setText("🎯 Klicke auf Karte (Nuance lernen)...")
+            cid = self.combo_lu_sample_class.currentData()
+            self.status_lbl.setText(f"📍 Klicke auf die Karte, um Farbmuster für '{cid}' zu lernen (Rechtsklick/Esc zum Beenden)...")
+
+    def _finish_lu_stamp_sampling(self):
+        """Finishes stamp sampling mode."""
+        if hasattr(self, 'lu_stamp_tool') and self.canvas.mapTool() == self.lu_stamp_tool:
+            self.canvas.unsetMapTool(self.lu_stamp_tool)
+        if hasattr(self, 'btn_lu_sample_stamp'):
+            self.btn_lu_sample_stamp.setStyleSheet("background-color: #e65100; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
+            self.btn_lu_sample_stamp.setText("🎯 Farbmuster auf Karte aufnehmen")
+        self.status_lbl.setText("Farbmuster-Sampling beendet.")
+
+    def _on_lu_stamp_sampled(self, point: QgsPointXY):
+        """Callback when user clicks canvas to sample a color/texture nuance for a land use class."""
+        layer = self.layer_combo.currentLayer()
+        if not layer or not isinstance(layer, QgsRasterLayer):
+            self.status_lbl.setText("Keine gültige Rasterkarte aktiv.")
+            return
+
+        raster_path = layer.dataProvider().dataSourceUri()
+        if not os.path.exists(raster_path):
+            return
+
+        # Transform point to raster coordinates
+        canvas_crs = self.canvas.mapSettings().destinationCrs()
+        layer_crs = layer.crs()
+        if canvas_crs.isValid() and layer_crs.isValid() and canvas_crs != layer_crs:
+            ct = QgsCoordinateTransform(canvas_crs, layer_crs, QgsProject.instance())
+            layer_pt = ct.transform(point)
+        else:
+            layer_pt = point
+
+        ds = gdal.Open(raster_path, gdal.GA_ReadOnly)
+        if ds is None:
+            return
+
+        gt = ds.GetGeoTransform()
+        x_origin, px_w, _, y_origin, _, px_h = gt[0], gt[1], gt[2], gt[3], gt[4], gt[5]
+        px = (layer_pt.x() - x_origin) / px_w
+        py = (layer_pt.y() - y_origin) / px_h
+        img_w, img_h = ds.RasterXSize, ds.RasterYSize
+
+        radius = int(self.slider_stamp_radius.value())
+        ix, iy = int(round(px)), int(round(py))
+        x0 = max(0, ix - radius - 5)
+        x1 = min(img_w, ix + radius + 6)
+        y0 = max(0, iy - radius - 5)
+        y1 = min(img_h, iy + radius + 6)
+
+        r_crop = ds.GetRasterBand(1).ReadAsArray(x0, y0, x1 - x0, y1 - y0)
+        g_crop = ds.GetRasterBand(2).ReadAsArray(x0, y0, x1 - x0, y1 - y0)
+        b_crop = ds.GetRasterBand(3).ReadAsArray(x0, y0, x1 - x0, y1 - y0)
+        ds = None
+
+        if r_crop is None or g_crop is None or b_crop is None:
+            return
+
+        crop_rgb = np.dstack((r_crop, g_crop, b_crop))
+        local_cx = px - x0
+        local_cy = py - y0
+
+        target_cid = self.combo_lu_sample_class.currentData()
+        if self.pipette_sampler is None:
+            self.pipette_sampler = PipetteSampler()
+
+        entry = self.pipette_sampler.sample_from_stamp(
+            crop_rgb, target_cid, local_cx, local_cy, radius=radius
+        )
+
+        if entry:
+            try:
+                mupp = self.canvas.mapUnitsPerPixel()
+                map_radius = max(mupp * 8.0, radius * abs(px_w))
+                circle_geom = QgsGeometry.fromPointXY(point).buffer(map_radius, 24)
+
+                rb = QgsRubberBand(self.canvas, QgsWkbTypes.PolygonGeometry)
+                class_color_map = {
+                    "forest": QColor(39, 174, 96, 90),
+                    "meadow": QColor(0, 206, 201, 90),
+                    "water": QColor(9, 132, 227, 110),
+                    "vineyard": QColor(214, 48, 49, 90),
+                    "garden": QColor(253, 203, 110, 90),
+                    "gravel": QColor(225, 112, 85, 90),
+                }
+                border_color_map = {
+                    "forest": QColor(27, 94, 32, 255),
+                    "meadow": QColor(0, 150, 140, 255),
+                    "water": QColor(13, 71, 161, 255),
+                    "vineyard": QColor(150, 30, 30, 255),
+                    "garden": QColor(200, 160, 50, 255),
+                    "gravel": QColor(180, 80, 50, 255),
+                }
+                rb.setFillColor(class_color_map.get(target_cid, QColor(255, 152, 0, 90)))
+                rb.setStrokeColor(border_color_map.get(target_cid, QColor(255, 87, 34, 255)))
+                rb.setWidth(2)
+                rb.setToGeometry(circle_geom, None)
+                rb.show()
+                self.lu_stamp_rubber_bands.append((target_cid, rb))
+            except Exception:
+                pass
+
+            self._update_lu_stamps_summary()
+            total_stamps = sum(len(s.stamps) for s in self.pipette_sampler.samples.values())
+            class_stamps = len(self.pipette_sampler.get_stamps(target_cid))
+            self.status_lbl.setText(
+                f"✓ Nuance #{entry.stamp_id} für '{target_cid}' erfasst ({entry.hex_color})! {class_stamps} Nuancen aktiv ({total_stamps} gesamt). Klicke weiter für weitere Nuancen."
+            )
+
+            # Re-trigger live preview
+            if hasattr(self, 'chk_lu_live_preview') and self.chk_lu_live_preview.isChecked():
+                self._trigger_lu_preview_update()
+
+    def _update_lu_stamps_summary(self):
+        """Updates the status text showing how many stamps are active per class."""
+        if not hasattr(self, 'pipette_sampler') or self.pipette_sampler is None:
+            return
+        parts = []
+        labels = {
+            "forest": "🌲 Wald",
+            "meadow": "🌱 Wiese",
+            "water": "💧 Gewässer",
+            "garden": "🏡 Gärten",
+            "vineyard": "🍇 Weinberge",
+            "gravel": "🏖️ Kies",
+        }
+        total = 0
+        for cid, lbl in labels.items():
+            cnt = len(self.pipette_sampler.get_stamps(cid))
+            if cnt > 0:
+                parts.append(f"{lbl}: {cnt}")
+                total += cnt
+
+        if parts:
+            summary = " | ".join(parts) + f" (Gesamt: {total})"
+            self.lbl_lu_stamps_summary.setText(f"🎨 Aktive Nuancen: {summary}")
+            self.lbl_lu_stamps_summary.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 10px;")
+        else:
+            self.lbl_lu_stamps_summary.setText("0 Nuancen gesampelt (Standard-Farbprofile aktiv)")
+            self.lbl_lu_stamps_summary.setStyleSheet("color: #888888; font-size: 10px;")
+
+    def _clear_class_stamps(self):
+        """Clears all sampled stamps for the currently selected land use class."""
+        if not hasattr(self, 'pipette_sampler') or self.pipette_sampler is None:
+            return
+        target_cid = self.combo_lu_sample_class.currentData()
+        self.pipette_sampler.clear_stamps(target_cid)
+
+        # Remove rubber bands for this class
+        remaining_bands = []
+        for cid, rb in self.lu_stamp_rubber_bands:
+            if cid == target_cid:
+                rb.reset(QgsWkbTypes.PolygonGeometry)
+                rb.hide()
+            else:
+                remaining_bands.append((cid, rb))
+        self.lu_stamp_rubber_bands = remaining_bands
+
+        self._update_lu_stamps_summary()
+        self.status_lbl.setText(f"Nuancen für '{target_cid}' geleert. Standard-Profil wieder aktiv.")
+        if hasattr(self, 'chk_lu_live_preview') and self.chk_lu_live_preview.isChecked():
+            self._trigger_lu_preview_update()
+
+    def _reset_all_stamps(self):
+        """Resets all classes back to their historical defaults."""
+        if not hasattr(self, 'pipette_sampler') or self.pipette_sampler is None:
+            return
+        self.pipette_sampler._init_defaults()
+        for _, rb in self.lu_stamp_rubber_bands:
+            rb.reset(QgsWkbTypes.PolygonGeometry)
+            rb.hide()
+        self.lu_stamp_rubber_bands.clear()
+        self._update_lu_stamps_summary()
+        self.status_lbl.setText("Alle Farbnuancen zurückgesetzt auf Standard-Profile.")
+        if hasattr(self, 'chk_lu_live_preview') and self.chk_lu_live_preview.isChecked():
+            self._trigger_lu_preview_update()
+
+    def _on_lu_live_preview_toggled(self, checked: bool):
+        if checked:
+            self._trigger_lu_preview_update()
+        else:
+            for l in QgsProject.instance().mapLayersByName("🔍 Land Use (Live Preview)"):
+                QgsProject.instance().removeMapLayer(l.id())
+            self.canvas.refresh()
+
+    def _trigger_lu_preview_update(self):
+        """Debounced live preview trigger for land use."""
+        if hasattr(self, 'chk_lu_live_preview') and self.chk_lu_live_preview.isChecked():
+            if hasattr(self, 'lu_preview_timer'):
+                self.lu_preview_timer.start(200)
+
+    def _update_lu_live_preview(self):
+        """Generates live categorized vector polygons for land use on the canvas."""
+        if not hasattr(self, 'chk_lu_live_preview') or not self.chk_lu_live_preview.isChecked():
+            return
+
+        layer = self.layer_combo.currentLayer()
+        if not layer or not isinstance(layer, QgsRasterLayer):
+            return
+
+        if self.rb_lu_roi.isChecked():
+            if self.current_lu_roi is None or self.current_lu_roi.isEmpty():
+                return
+            if self.cached_lu_roi_rgb is None:
+                self._cache_lu_roi_data()
+        else:
+            if self.cached_lu_roi_rgb is None:
+                self._cache_lu_roi_data()
+
+        if self.cached_lu_roi_rgb is None:
+            return
+
+        image_rgb = self.cached_lu_roi_rgb
+        sub_x, sub_y = self.cached_lu_sub_origin
+        px_w, px_h = self.cached_lu_px_size
+
+        enabled_cats = []
+        if self.chk_lu_forest.isChecked(): enabled_cats.append("forest")
+        if self.chk_lu_meadow.isChecked(): enabled_cats.append("meadow")
+        if self.chk_lu_water.isChecked(): enabled_cats.append("water")
+        if self.chk_lu_garden.isChecked(): enabled_cats.append("garden")
+        if self.chk_lu_vineyard.isChecked(): enabled_cats.append("vineyard")
+        if hasattr(self, 'chk_lu_gravel') and self.chk_lu_gravel.isChecked(): enabled_cats.append("gravel")
+
+        if not enabled_cats or self.pipette_sampler is None:
+            return
+
+        # Update sampler parameters from sliders
+        tol_val = int(self.slider_lu_tol.value())
+        min_area_val = float(self.slider_lu_min_area.value())
+        tex_w_val = float(self.slider_lu_tex_w.value()) / 10.0
+
+        for s in self.pipette_sampler.samples.values():
+            s.tolerance = tol_val
+            s.min_area_px = min_area_val
+            s.texture_weight = tex_w_val
+
+        try:
+            polys_by_class = self.pipette_sampler.extract_competitive_polygons(
+                image_rgb, active_class_ids=enabled_cats
+            )
+        except Exception as e:
+            self.status_lbl.setText(f"Vorschaufehler: {e}")
+            return
+
+        layer_name = "🔍 Land Use (Live Preview)"
+        existing = QgsProject.instance().mapLayersByName(layer_name)
+        if existing:
+            vl_prev = existing[0]
+        else:
+            crs_auth = layer.crs().authid() if layer.crs().isValid() else "EPSG:25832"
+            vl_prev = QgsVectorLayer(f"Polygon?crs={crs_auth}", layer_name, "memory")
+            pr = vl_prev.dataProvider()
+            pr.addAttributes([
+                QgsField("id", QVariant.Int),
+                QgsField("category", QVariant.String),
+                QgsField("category_label", QVariant.String),
+                QgsField("area_m2", QVariant.Double),
+            ])
+            vl_prev.updateFields()
+
+            categories = [
+                ("forest", "Forest (Wald)", "46,125,50,150", "27,94,32,230"),
+                ("meadow", "Meadow (Wiesen/Weiden)", "0,206,201,150", "0,150,140,230"),
+                ("water", "Water Body (Gewässer)", "9,132,227,180", "13,71,161,240"),
+                ("garden", "Gardens (Gärten)", "253,203,110,150", "200,160,50,230"),
+                ("vineyard", "Vineyard (Weinberge)", "214,48,49,150", "150,30,30,230"),
+                ("gravel", "Gravel (Kies/Sand)", "225,112,85,150", "180,80,50,230"),
+            ]
+            cats = []
+            for cat_val, cat_lbl, fill_col, border_col in categories:
+                sym = QgsFillSymbol.createSimple({
+                    'color': fill_col,
+                    'color_border': border_col,
+                    'width_border': '0.4',
+                    'style': 'solid',
+                    'style_border': 'solid'
+                })
+                cats.append(QgsRendererCategory(cat_val, sym, cat_lbl))
+
+            renderer = QgsCategorizedSymbolRenderer("category", cats)
+            vl_prev.setRenderer(renderer)
+            QgsProject.instance().addMapLayer(vl_prev, False)
+            QgsProject.instance().layerTreeRoot().insertLayer(0, vl_prev)
+
+        pr_prev = vl_prev.dataProvider()
+        pr_prev.deleteFeatures(vl_prev.allFeatureIds())
+
+        new_feats = []
+        feat_id = 1
+        m2_per_px2 = abs(px_w * px_h)
+
+        for cat, plist in polys_by_class.items():
+            for p in plist:
+                if p is None or p.is_empty:
+                    continue
+                try:
+                    coords = [(sub_x + pt[0] * px_w, sub_y + pt[1] * px_h) for pt in p.exterior.coords]
+                    holes = [[(sub_x + pt[0] * px_w, sub_y + pt[1] * px_h) for pt in ring.coords] for ring in p.interiors]
+                    pts_ext = [QgsPointXY(x, y) for x, y in coords]
+                    pts_holes = [[QgsPointXY(x, y) for x, y in h] for h in holes] if holes else []
+                    geom_qgs = QgsGeometry.fromPolygonXY([pts_ext] + pts_holes)
+                    if not geom_qgs.isGeosValid():
+                        geom_qgs = geom_qgs.makeValid()
+
+                    f = QgsFeature(vl_prev.fields())
+                    f.setGeometry(geom_qgs)
+                    f.setAttribute("id", feat_id)
+                    f.setAttribute("category", cat)
+                    f.setAttribute("category_label", cat.capitalize())
+                    f.setAttribute("area_m2", round(float(p.area) * m2_per_px2, 1))
+                    new_feats.append(f)
+                    feat_id += 1
+                except Exception:
+                    pass
+
+        if new_feats:
+            pr_prev.addFeatures(new_feats)
+
+        vl_prev.updateExtents()
+        vl_prev.triggerRepaint()
+        self.canvas.refresh()
+        self.status_lbl.setText(f"🔍 Land Use Live-Vorschau: {len(new_feats)} Flächen erkannt.")
+
     def _run_landuse_extraction(self):
         """Launches the LandUseExtractionTask in background thread."""
         layer = self.layer_combo.currentLayer()
@@ -2017,6 +2626,8 @@ class TranchotDockWidget(QDockWidget):
             enabled_cats.append("garden")
         if self.chk_lu_vineyard.isChecked():
             enabled_cats.append("vineyard")
+        if hasattr(self, 'chk_lu_gravel') and self.chk_lu_gravel.isChecked():
+            enabled_cats.append("gravel")
 
         if not enabled_cats:
             QMessageBox.information(
@@ -2029,15 +2640,19 @@ class TranchotDockWidget(QDockWidget):
         # Check ROI vs full sheet
         use_roi = self.rb_lu_roi.isChecked()
         if use_roi:
-            if self.current_roi is None or self.current_roi.isEmpty():
+            if self.current_lu_roi is not None and not self.current_lu_roi.isEmpty():
+                layer_roi = self._transform_canvas_to_layer_rect(self.current_lu_roi, layer)
+                layer_geom = self._transform_canvas_to_layer_geom(self.current_lu_roi_geom, layer) if hasattr(self, 'current_lu_roi_geom') and self.current_lu_roi_geom is not None else None
+            elif hasattr(self, 'current_roi') and self.current_roi is not None and not self.current_roi.isEmpty():
+                layer_roi = self._transform_canvas_to_layer_rect(self.current_roi, layer)
+                layer_geom = self._transform_canvas_to_layer_geom(self.current_roi_geom, layer) if hasattr(self, 'current_roi_geom') and self.current_roi_geom is not None else None
+            else:
                 QMessageBox.information(
                     self,
-                    "No Area Selected",
-                    "Please draw a polygon using '📐 Draw Settlement Polygon' first, or select 'Full Map Sheet Extent'."
+                    "Kein Gebiet ausgewählt",
+                    "Bitte zeichne zuerst ein Polygon mit '📐 Landnutzungs-Polygon einzeichnen' oder wähle 'Gesamtblatt'."
                 )
                 return
-            layer_roi = self._transform_canvas_to_layer_rect(self.current_roi, layer)
-            layer_geom = self._transform_canvas_to_layer_geom(self.current_roi_geom, layer) if hasattr(self, 'current_roi_geom') and self.current_roi_geom is not None else None
         else:
             layer_roi = None
             layer_geom = None
@@ -2049,6 +2664,16 @@ class TranchotDockWidget(QDockWidget):
             config.enable_water = "water" in enabled_cats
             config.enable_garden = "garden" in enabled_cats
             config.enable_vineyard = "vineyard" in enabled_cats
+
+        # Apply current slider values to pipette_sampler
+        if self.pipette_sampler is not None:
+            tol_val = int(self.slider_lu_tol.value())
+            min_area_val = float(self.slider_lu_min_area.value())
+            tex_w_val = float(self.slider_lu_tex_w.value()) / 10.0
+            for s in self.pipette_sampler.samples.values():
+                s.tolerance = tol_val
+                s.min_area_px = min_area_val
+                s.texture_weight = tex_w_val
 
         output_crs = layer.crs().authid() if layer.crs().isValid() else "EPSG:25832"
         layer_name = f"🌲 Land Use ({layer.name()})"
@@ -2066,6 +2691,7 @@ class TranchotDockWidget(QDockWidget):
             roi_geometry=layer_geom,
             layer_name=layer_name,
             output_crs=output_crs,
+            pipette_sampler=self.pipette_sampler,
         )
         self.current_task.task_completed.connect(self._on_landuse_task_completed)
         self.current_task.task_failed.connect(self._on_landuse_task_failed)
@@ -2076,6 +2702,11 @@ class TranchotDockWidget(QDockWidget):
         self.btn_extract_landuse.setEnabled(True)
         self.progress_bar.setValue(100)
         self.status_lbl.setText(f"Done! {count} land-use parcels classified in '{layer_name}'.")
+
+        # Remove preview vector layer now that permanent extraction is finished
+        for l in QgsProject.instance().mapLayersByName("🔍 Land Use (Live Preview)"):
+            QgsProject.instance().removeMapLayer(l.id())
+
         if count == 0:
             QMessageBox.information(
                 self, "No Land-Use Features Found",

@@ -765,21 +765,22 @@ class PipetteSampler:
 
         for idx, sample in enumerate(active_classes, 2):
             cid = sample.class_id.lower()
+            tol_scale = float(getattr(sample, "tolerance", 24)) / 24.0
             if "forest" in cid or "wald" in cid:
                 gate = gate_forest
-                max_allowed_dist = 4.2
+                max_allowed_dist = 4.2 * tol_scale
             elif "meadow" in cid or "wiese" in cid or "weide" in cid or "garden" in cid or "garten" in cid:
                 gate = gate_meadow
-                max_allowed_dist = 3.8
+                max_allowed_dist = 3.8 * tol_scale
             elif "water" in cid or "gewässer" in cid or "wasser" in cid:
                 gate = gate_water
-                max_allowed_dist = 4.2
+                max_allowed_dist = 4.2 * tol_scale
             elif "vineyard" in cid or "wein" in cid or "gravel" in cid or "kies" in cid:
                 gate = gate_warm
-                max_allowed_dist = 4.2
+                max_allowed_dist = 4.2 * tol_scale
             else:
                 gate = (~is_pure_paper)
-                max_allowed_dist = 4.2
+                max_allowed_dist = 4.2 * tol_scale
 
             c_mask = ((winner_idx == idx) & (min_dists <= max_allowed_dist) & gate & valid_collar & (~is_pure_paper) & (~is_relief_slope))
 
@@ -807,20 +808,21 @@ class PipetteSampler:
                 continue
 
             cid = sample.class_id
+            user_min_area = float(getattr(sample, "min_area_px", 0.0))
             if cid == "water":
                 # Specialized water ribbon & lake pipeline
                 k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
                 k_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
                 mask_closed = cv2.morphologyEx(c_mask, cv2.MORPH_CLOSE, k_close)
                 mask_clean = cv2.dilate(mask_closed, k_dilate, iterations=1)
-                min_area = 20.0  # Linear streams and lakes
+                min_area = max(10.0, user_min_area * 0.1) if user_min_area > 0 else 20.0  # Linear streams and lakes
                 approx_eps = 0.5
                 min_hole_area = 5000.0 * (scale_factor ** 2)
             elif cid == "forest":
                 # Forest canopy closing: bridges foliage crowns without turning linear road hachures into sausages
                 k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))
                 mask_clean = cv2.morphologyEx(c_mask, cv2.MORPH_CLOSE, k_close)
-                min_area = 550.0
+                min_area = max(40.0, user_min_area) if user_min_area > 0 else 550.0
                 approx_eps = 0.5
                 min_hole_area = 25000.0 * (scale_factor ** 2)  # Fill bare slope cliffs inside the mountain forest
             elif cid in ("meadow", "garden"):
@@ -830,7 +832,7 @@ class PipetteSampler:
                 mask_closed[is_pure_paper] = 0
                 mask_closed[is_relief_slope] = 0
                 mask_clean = mask_closed
-                min_area = 250.0
+                min_area = max(25.0, user_min_area) if user_min_area > 0 else 250.0
                 approx_eps = 0.5
                 min_hole_area = 500.0 * (scale_factor ** 2)
             else:
@@ -838,7 +840,7 @@ class PipetteSampler:
                 k_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
                 mask_closed = cv2.morphologyEx(c_mask, cv2.MORPH_CLOSE, k_close)
                 mask_clean = cv2.dilate(mask_closed, k_dilate, iterations=1)
-                min_area = 150.0
+                min_area = max(25.0, user_min_area) if user_min_area > 0 else 150.0
                 approx_eps = 0.5
                 min_hole_area = 5000.0 * (scale_factor ** 2)
 

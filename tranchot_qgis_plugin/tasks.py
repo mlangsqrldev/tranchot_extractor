@@ -352,15 +352,17 @@ class LandUseExtractionTask(QgsTask):
         roi_geometry: Optional[QgsGeometry] = None,
         layer_name: str = "🌲 Land Use",
         output_crs: str = "EPSG:25832",
+        pipette_sampler: Optional[Any] = None,
     ):
         super().__init__(f"HistMap: Land Use Extraction ({layer_name})", QgsTask.CanCancel)
         self.raster_path = raster_path
         self.config = config
-        self.enabled_categories = enabled_categories or ["forest", "meadow", "water", "garden", "vineyard"]
+        self.enabled_categories = enabled_categories or ["forest", "meadow", "water", "garden", "vineyard", "gravel"]
         self.roi_extent = roi_extent
         self.roi_geometry = roi_geometry
         self.layer_name = layer_name
         self.output_crs = output_crs
+        self.pipette_sampler = pipette_sampler
 
         self.extracted_features: List[Dict[str, Any]] = []
         self.error_msg: Optional[str] = None
@@ -462,21 +464,41 @@ class LandUseExtractionTask(QgsTask):
                 except Exception as e:
                     QgsMessageLog.logMessage(f"Error in LandUse ROI conversion: {e}", "HistMap", Qgis.Warning)
 
-            # Reload LandUseExtractor dynamically to guarantee latest code
-            try:
-                import importlib
-                if "tranchot_extractor.extractors.landuse_extractor" in sys.modules:
-                    importlib.reload(sys.modules["tranchot_extractor.extractors.landuse_extractor"])
-                from tranchot_extractor.extractors.landuse_extractor import LandUseExtractor
-            except Exception:
-                pass
+            features_list = []
+            if self.pipette_sampler is not None:
+                polys_by_class = self.pipette_sampler.extract_competitive_polygons(
+                    image_rgb, active_class_ids=self.enabled_categories
+                )
+                feat_id = 1
+                for cat, plist in polys_by_class.items():
+                    for p in plist:
+                        if roi_polys and len(roi_polys) > 0:
+                            if not any(rb.intersects(p) for rb in roi_polys):
+                                continue
+                        features_list.append(type("LUFeat", (), {
+                            "id": feat_id,
+                            "category": cat,
+                            "geometry": p,
+                            "area_px": p.area
+                        })())
+                        feat_id += 1
+            else:
+                # Reload LandUseExtractor dynamically to guarantee latest code
+                try:
+                    import importlib
+                    if "tranchot_extractor.extractors.landuse_extractor" in sys.modules:
+                        importlib.reload(sys.modules["tranchot_extractor.extractors.landuse_extractor"])
+                    from tranchot_extractor.extractors.landuse_extractor import LandUseExtractor
+                except Exception:
+                    pass
 
-            extractor = LandUseExtractor(config=self.config)
-            result: LandUseExtractionResult = extractor.extract(
-                image_rgb=image_rgb,
-                roi_boundaries=roi_polys if roi_polys else None,
-                enabled_categories=self.enabled_categories
-            )
+                extractor = LandUseExtractor(config=self.config)
+                result: LandUseExtractionResult = extractor.extract(
+                    image_rgb=image_rgb,
+                    roi_boundaries=roi_polys if roi_polys else None,
+                    enabled_categories=self.enabled_categories
+                )
+                features_list = result.features
 
             self.setProgress(80.0)
             if self.isCanceled():
@@ -488,11 +510,12 @@ class LandUseExtractionTask(QgsTask):
                 "water": "Water Body (Gewässer)",
                 "garden": "Gardens & Orchards (Gärten)",
                 "vineyard": "Vineyard / Arable (Weinberge)",
+                "gravel": "Gravel & Sand (Kies/Sand)",
             }
 
             # Transform Shapely polygons to Map CRS
             m2_per_px2 = abs(px_w * px_h)
-            for feat in result.features:
+            for feat in features_list:
                 poly = feat.geometry
                 if poly is None or poly.is_empty:
                     continue
@@ -575,6 +598,7 @@ class LandUseExtractionTask(QgsTask):
                 ("water", "Water Body (Gewässer)", "30,136,229,210", "13,71,161,255"),
                 ("garden", "Gardens & Orchards (Gärten)", "165,214,167,180", "46,125,50,255"),
                 ("vineyard", "Vineyard / Arable (Weinberge)", "212,163,115,180", "141,91,76,255"),
+                ("gravel", "Gravel & Sand (Kies/Sand)", "225,112,85,180", "180,80,50,255"),
             ]
 
             cats = []

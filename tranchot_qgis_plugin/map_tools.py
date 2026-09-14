@@ -166,3 +166,35 @@ class GazetteerPickMapTool(QgsMapTool):
         if event.key() == Qt.Key.Key_Escape:
             self.canceled.emit()
 
+
+class LandUseStampMapTool(QgsMapTool):
+    """
+    Interactive map tool allowing the user to click points on the canvas
+    to sample multiple color/texture nuances (stamps) for land-use classification.
+    - Left-Click: Sample nuance at coordinate (remains active for multi-sampling)
+    - Right-Click or Escape: Finish/exit stamp sampling mode
+    """
+
+    stamp_sampled = pyqtSignal(QgsPointXY)
+    finished = pyqtSignal()
+
+    def __init__(self, canvas, on_stamp_callback: Optional[Callable[[QgsPointXY], None]] = None):
+        super().__init__(canvas)
+        self.canvas = canvas
+        self.on_stamp_callback = on_stamp_callback
+        self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def canvasPressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            pt = self.toMapCoordinates(event.pos())
+            self.stamp_sampled.emit(pt)
+            if self.on_stamp_callback:
+                self.on_stamp_callback(pt)
+        elif event.button() == Qt.MouseButton.RightButton:
+            self.finished.emit()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.finished.emit()
+
+

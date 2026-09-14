@@ -198,7 +198,7 @@ class TranchotDockWidget(QDockWidget):
         main_layout.addWidget(header_box)
 
         # Raster Layer Selection
-        layer_group = QGroupBox("1. Aktives historisches Kartenblatt")
+        layer_group = QGroupBox("1. Active Historical Map Sheet")
         layer_layout = QVBoxLayout(layer_group)
         self.layer_combo = QgsMapLayerComboBox()
         self.layer_combo.setFilters(QgsMapLayerProxyModel.RasterLayer)
@@ -207,18 +207,18 @@ class TranchotDockWidget(QDockWidget):
 
         # Global Map View Toggle: Aged (Original) vs Normalized (De-yellowed)
         view_toggle_layout = QHBoxLayout()
-        self.btn_view_orig = QPushButton("📜 Original (Historisches Papier)")
+        self.btn_view_orig = QPushButton("📜 Original (Aged Paper)")
         self.btn_view_orig.setCheckable(True)
         self.btn_view_orig.setChecked(True)
         self.btn_view_orig.setStyleSheet(
             "QPushButton:checked { background-color: #2e7d32; color: white; font-weight: bold; border: 2px solid #81c784; border-radius: 4px; padding: 5px; } "
             "QPushButton { background-color: #333333; color: #cccccc; border-radius: 4px; padding: 5px; }"
         )
-        self.btn_view_orig.setToolTip("Zeigt den originalen historischen Kartenscan (gealtertes Papier).")
+        self.btn_view_orig.setToolTip("Displays the authentic original historical map scan (aged parchment paper).")
         self.btn_view_orig.clicked.connect(lambda: self._set_global_view_mode("original"))
         view_toggle_layout.addWidget(self.btn_view_orig)
 
-        self.btn_view_norm = QPushButton("✨ Normalisiert (Entgilbt)")
+        self.btn_view_norm = QPushButton("✨ Normalized (De-yellowed)")
         self.btn_view_norm.setCheckable(True)
         self.btn_view_norm.setChecked(False)
         self.btn_view_norm.setStyleSheet(
@@ -226,7 +226,7 @@ class TranchotDockWidget(QDockWidget):
             "QPushButton { background-color: #333333; color: #cccccc; border-radius: 4px; padding: 5px; }"
         )
         self.btn_view_norm.setToolTip(
-            "Schaltet die Kartenansicht auf das entgilbte, farbkorrigierte Blatt (von-Kries-Adaption & Kontrastanhebung)."
+            "Switches map view to the de-yellowed, white-balanced sheet (von Kries chromatic adaptation & contrast enhancement)."
         )
         self.btn_view_norm.clicked.connect(lambda: self._set_global_view_mode("normalized"))
         view_toggle_layout.addWidget(self.btn_view_norm)
@@ -260,9 +260,7 @@ class TranchotDockWidget(QDockWidget):
         footer_layout = QVBoxLayout(footer_box)
         footer_layout.setContentsMargins(4, 4, 4, 4)
 
-        self.status_lbl = QLabel("Bereit. Bitte ein historisches Kartenblatt auswählen.")
-        self.status_lbl.setStyleSheet("color: #d0d0d0; font-size: 10px;")
-        footer_layout.addWidget(self.status_lbl)
+        self.status_lbl = QLabel("Ready. Please select a historical map sheet.")
         self.status_lbl.setStyleSheet("color: #d0d0d0; font-size: 10px;")
         footer_layout.addWidget(self.status_lbl)
 
@@ -283,44 +281,44 @@ class TranchotDockWidget(QDockWidget):
         layout.setSpacing(8)
 
         # ROI Selection Section
-        roi_group = QGroupBox("A. Untersuchungsgebiet (Siedlungspolygon)")
+        roi_group = QGroupBox("A. Area of Interest (Settlement Polygon)")
         roi_layout = QVBoxLayout(roi_group)
 
         btn_box = QHBoxLayout()
-        self.btn_roi = QPushButton("📐 Siedlungspolygon einzeichnen")
-        self.btn_roi.setToolTip("Klicke punktweise auf die Karte, um ein beliebiges Polygon um die Siedlung zu zeichnen (Rechtsklick / Doppelklick zum Abschließen).")
+        self.btn_roi = QPushButton("📐 Draw Settlement Polygon")
+        self.btn_roi.setToolTip("Click points on the canvas to draw an arbitrary polygon around the settlement (Right-click / double-click to finish).")
         self.btn_roi.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
         self.btn_roi.clicked.connect(self._activate_roi_tool)
         btn_box.addWidget(self.btn_roi)
 
-        self.btn_clear_roi = QPushButton("❌ Zurücksetzen")
-        self.btn_clear_roi.setToolTip("Siedlungspolygon zurücksetzen")
+        self.btn_clear_roi = QPushButton("❌ Reset")
+        self.btn_clear_roi.setToolTip("Reset settlement polygon")
         self.btn_clear_roi.clicked.connect(self._clear_roi)
         btn_box.addWidget(self.btn_clear_roi)
         roi_layout.addLayout(btn_box)
 
-        self.roi_info_lbl = QLabel("Gebiet: Noch kein Siedlungspolygon gezeichnet (Button oben nutzen)")
+        self.roi_info_lbl = QLabel("Area: No settlement polygon drawn yet (use button above)")
         self.roi_info_lbl.setStyleSheet("color: #888888; font-size: 10px;")
         roi_layout.addWidget(self.roi_info_lbl)
 
         # Checkbox to toggle Gazetteer places on map
-        self.chk_show_gazetteer = QCheckBox("📍 Orte aus Gazetteer auf Karte anzeigen")
+        self.chk_show_gazetteer = QCheckBox("📍 Show Gazetteer Places on Map")
         self.chk_show_gazetteer.setChecked(False)
-        self.chk_show_gazetteer.setToolTip("Zeigt alle historischen Orte, Dörfer und Landmarken aus dem GOV-Gazetteer mit Beschriftung auf der Karte an.")
+        self.chk_show_gazetteer.setToolTip("Displays all historical settlements, villages, and landmarks from the GOV gazetteer labeled on the map.")
         self.chk_show_gazetteer.toggled.connect(self._toggle_gazetteer_map_layer)
         roi_layout.addWidget(self.chk_show_gazetteer)
 
         # Gazetteer Match Section
         gaz_box = QHBoxLayout()
-        gaz_lbl = QLabel("Toponym / Ortsname:")
+        gaz_lbl = QLabel("Toponym / Place Name:")
         self.gazetteer_combo = QComboBox()
         self.gazetteer_combo.setEditable(True)
-        self.gazetteer_combo.addItem("Keiner", {"name": None, "type": None})
-        self.gazetteer_combo.setToolTip("Wähle den Ortsnamen aus den Gazetteer-Treffern oder tippe einen Namen frei ein.")
+        self.gazetteer_combo.addItem("None", {"name": None, "type": None})
+        self.gazetteer_combo.setToolTip("Select a place name from gazetteer matches or type a custom name.")
         self.gazetteer_combo.currentTextChanged.connect(self._on_gazetteer_match_changed)
 
-        self.btn_pick_gazetteer = QPushButton("🎯 Auf Karte wählen")
-        self.btn_pick_gazetteer.setToolTip("Klicke direkt auf einen Gazetteer-Punkt oder ein Dorf auf der Karte, um den Ort auszuwählen.")
+        self.btn_pick_gazetteer = QPushButton("🎯 Pick on Map")
+        self.btn_pick_gazetteer.setToolTip("Click directly on a gazetteer point or village on the map canvas to select it.")
         self.btn_pick_gazetteer.setStyleSheet(
             "background-color: #e65100; color: white; font-weight: bold; padding: 5px 8px; border-radius: 4px;"
         )
@@ -332,9 +330,9 @@ class TranchotDockWidget(QDockWidget):
         roi_layout.addLayout(gaz_box)
         
         type_box = QHBoxLayout()
-        type_lbl = QLabel("Siedlungstyp (LVR):")
+        type_lbl = QLabel("Settlement Type (LVR):")
         self.type_combo = QComboBox()
-        self.type_combo.addItem("Standard (Gebäude / Gehöfte)", None)
+        self.type_combo.addItem("Default (Building / Courtyard)", None)
         csv_path = os.path.join(os.path.dirname(__file__), "resources", "siedlungstypen_lvr_vokabular.csv")
         try:
             with open(csv_path, "r", encoding="utf-8") as f:
@@ -352,13 +350,13 @@ class TranchotDockWidget(QDockWidget):
         type_box.addWidget(self.type_combo)
         roi_layout.addLayout(type_box)
         
-        self.gazetteer_info_lbl = QLabel("Warte auf Siedlungspolygon...")
+        self.gazetteer_info_lbl = QLabel("Waiting for settlement polygon...")
         self.gazetteer_info_lbl.setStyleSheet("color: #888888; font-size: 10px;")
         roi_layout.addWidget(self.gazetteer_info_lbl)
 
         # Action button to permanently save village and buildings
-        self.btn_save_village = QPushButton("💾 Dorf & Gebäude speichern")
-        self.btn_save_village.setToolTip("Speichert das aktuelle Dorf (Ortslagen-Polygon) und alle erkannten Gebäude dauerhaft in die Ebenen, damit du das nächste Dorf erfassen kannst.")
+        self.btn_save_village = QPushButton("💾 Save Village & Buildings")
+        self.btn_save_village.setToolTip("Permanently saves current village (boundary polygon) and all detected buildings into layers so you can proceed to the next village.")
         self.btn_save_village.setStyleSheet(
             "background-color: #1b5e20; color: white; font-weight: bold; padding: 7px; border-radius: 4px;"
         )
@@ -366,10 +364,10 @@ class TranchotDockWidget(QDockWidget):
         roi_layout.addWidget(self.btn_save_village)
 
         # Checkbox for interactive live preview
-        self.chk_live_preview = QCheckBox("⚡ Live-Vorschau aktiv (sofortige Reaktion auf Schieberegler)")
+        self.chk_live_preview = QCheckBox("⚡ Live Preview Active (instant response to sliders)")
         self.chk_live_preview.setChecked(True)
         self.chk_live_preview.setToolTip(
-            "Aktualisiert erkannte Gebäudepolygone sofort auf der Karte, sobald Schieberegler bewegt werden."
+            "Instantly updates detected building polygons on the canvas as sliders are adjusted."
         )
         self.chk_live_preview.toggled.connect(self._on_live_preview_toggled)
         roi_layout.addWidget(self.chk_live_preview)
@@ -377,7 +375,7 @@ class TranchotDockWidget(QDockWidget):
         layout.addWidget(roi_group)
 
         # Parameter Section with Sliders and Rich Tooltips
-        param_group = QGroupBox("B. Farbraum- & Filterparameter")
+        param_group = QGroupBox("B. Color Space & Filter Parameters")
         param_layout = QVBoxLayout(param_group)
         param_layout.setSpacing(10)
 
@@ -442,29 +440,29 @@ class TranchotDockWidget(QDockWidget):
 
         # 1. Lower and Upper Carmine Red Threshold Sliders (Bandpass)
         tt_min_red = (
-            "<h3>🔴 Karminrot: Untere Schwelle (Min. Farbintensität)</h3>"
-            "<p>Bestimmt die minimale rote Farbpigmentierung, ab der ein Pixel als Gebäude klassifiziert wird:</p>"
+            "<h3>🔴 Carmine Red: Lower Threshold (Min Intensity)</h3>"
+            "<p>Determines the minimum red pigmentation required for a pixel to be classified as a building:</p>"
             "<ul>"
-            "<li><b>Niedriger (10–25):</b> Höchste Empfindlichkeit. Erfasst zarte Aquarelllasuren, verwitterte Scheunentrakte und feine Umrisslinien.</li>"
-            "<li><b>Höher (40–80):</b> Strengerer Filter. Reagiert nur auf kräftige, deckende Karminrot-Tusche.</li>"
-            "<li><b>Standard:</b> 18</li>"
+            "<li><b>Lower (10–25):</b> Highest sensitivity. Captures pale watercolor washes, weathered outbuildings, and thin contours.</li>"
+            "<li><b>Higher (40–80):</b> Stricter filter. Responds only to solid, saturated carmine red ink.</li>"
+            "<li><b>Default:</b> 18</li>"
             "</ul>"
         )
         self.spin_min_red, self.slider_min_red = add_slider_spin_row(
-            param_layout, "🔴 Karminrot: Untere Schwelle (Min):", tt_min_red,
+            param_layout, "🔴 Carmine Red: Lower Threshold (Min):", tt_min_red,
             min_val=5, max_val=150, step=1, default_val=18, scale=1.0, decimals=0
         )
 
         tt_max_red = (
-            "<h3>🔴 Karminrot: Obere Schwelle (Max. Farbintensität)</h3>"
-            "<p>Setzt die obere Intensitätsgrenze:</p>"
+            "<h3>🔴 Carmine Red: Upper Threshold (Max Intensity)</h3>"
+            "<p>Sets the upper intensity limit:</p>"
             "<ul>"
-            "<li><b>Standard (255):</b> Unbegrenzt (beinhaltet alle leuchtenden Rottöne).</li>"
-            "<li><b>Niedriger (120–200):</b> Filtert überstrahlende Flecken heraus.</li>"
+            "<li><b>Default (255):</b> Unlimited (includes all vibrant red tones).</li>"
+            "<li><b>Lower (120–200):</b> Filters out bright stains and scan artifacts.</li>"
             "</ul>"
         )
         self.spin_max_red, self.slider_max_red = add_slider_spin_row(
-            param_layout, "🔴 Karminrot: Obere Schwelle (Max):", tt_max_red,
+            param_layout, "🔴 Carmine Red: Upper Threshold (Max):", tt_max_red,
             min_val=30, max_val=255, step=2, default_val=255, scale=1.0, decimals=0
         )
 
@@ -487,31 +485,31 @@ class TranchotDockWidget(QDockWidget):
 
         # 2. Min Wall Thickness
         tt_thick = (
-            "<h3>Minimale Wandstärke (px)</h3>"
-            "<p>Unterscheidet feine Begrenzungslinien von massiven Baukörpern:</p>"
+            "<h3>Minimum Wall Thickness (px)</h3>"
+            "<p>Distinguishes fine boundary lines from solid structural walls:</p>"
             "<ul>"
-            "<li><b>Niedriger (0.4 - 0.8 px):</b> Bewahrt feine Umrisszeichnungen, Gartenmauern und schmale Flügel.</li>"
-            "<li><b>Höher (1.5 - 3.5 px):</b> Behält nur geschlossene Baukörper.</li>"
-            "<li><b>Standard:</b> 0.6 px</li>"
+            "<li><b>Lower (0.4 - 0.8 px):</b> Preserves delicate contour drawings, garden walls, and narrow wings.</li>"
+            "<li><b>Higher (1.5 - 3.5 px):</b> Retains only solid building masses.</li>"
+            "<li><b>Default:</b> 0.6 px</li>"
             "</ul>"
         )
         self.spin_thickness, self.slider_thickness = add_slider_spin_row(
-            param_layout, "Minimale Wandstärke (px):", tt_thick,
+            param_layout, "Minimum Wall Thickness (px):", tt_thick,
             min_val=0.4, max_val=5.0, step=0.1, default_val=0.6, scale=10.0, decimals=1
         )
 
         # 3. Min Area
         tt_area = (
-            "<h3>Mindestfläche Gebäude (px)</h3>"
-            "<p>Filtert isoliertes Scan-Rauschen unterhalb dieser Pixelanzahl heraus:</p>"
+            "<h3>Minimum Building Area (px)</h3>"
+            "<p>Filters out isolated scan noise below this pixel count:</p>"
             "<ul>"
-            "<li><b>Niedriger (2 - 5 px):</b> Erfasst auch kleinste Nebengebäude und Schuppen.</li>"
-            "<li><b>Höher (15 - 30 px):</b> Unterdrückt Scan-Artefakte und Punkte.</li>"
-            "<li><b>Standard:</b> 5 px</li>"
+            "<li><b>Lower (2 - 5 px):</b> Captures small sheds and annexes.</li>"
+            "<li><b>Higher (15 - 30 px):</b> Suppresses speckles and artifacts.</li>"
+            "<li><b>Default:</b> 5 px</li>"
             "</ul>"
         )
         self.spin_min_area, self.slider_min_area = add_slider_spin_row(
-            param_layout, "Mindestfläche Gebäude (px):", tt_area,
+            param_layout, "Minimum Building Area (px):", tt_area,
             min_val=2, max_val=200, step=1, default_val=5, scale=1.0, decimals=0
         )
 
@@ -522,24 +520,24 @@ class TranchotDockWidget(QDockWidget):
         param_layout.addWidget(sep)
 
         tt_courtyard = (
-            "<h3>Innenhöfe subtrahieren (Höfe als Löcher aussparen)</h3>"
-            "<p>Analysiert geschlossene Hofanlagen (Dreiseithöfe, Vierkanthöfe, Burgen):</p>"
+            "<h3>Subtract Courtyards (Hollow Out Inner Yards)</h3>"
+            "<p>Analyzes enclosed farmsteads and courtyards (three-sided / four-sided yards, castles):</p>"
             "<ul>"
-            "<li><b>Aktiviert (Empfohlen):</b> Subtrahiert offene Innenhöfe als Geometrielöcher (Donut-Polygone) und bewahrt den authentischen Flügelgrundriss.</li>"
-            "<li><b>Deaktiviert:</b> Füllt die gesamte Hofanlage als massiven Block aus.</li>"
+            "<li><b>Enabled (Recommended):</b> Subtracts open inner courtyards as geometric holes (donut polygons), preserving authentic perimeter floor plans.</li>"
+            "<li><b>Disabled:</b> Fills the entire courtyard perimeter as a solid block.</li>"
             "</ul>"
         )
-        self.chk_courtyard = QCheckBox("Innenhöfe subtrahieren (Höfe als Löcher aussparen)")
+        self.chk_courtyard = QCheckBox("Subtract Courtyards (Hollow out inner yards)")
         self.chk_courtyard.setChecked(True)
         self.chk_courtyard.setToolTip(tt_courtyard)
         self.chk_courtyard.toggled.connect(self._trigger_preview_update)
         param_layout.addWidget(self.chk_courtyard)
 
         tt_black = (
-            "<h3>Schwarze Monumentalbauten & Kirchen</h3>"
-            "<p>Erfasst große Kirchen und Monumentalbauten, die in schwarzer Tusche statt roter Aquarellfarbe gezeichnet wurden.</p>"
+            "<h3>Capture Monumental Black Buildings & Churches</h3>"
+            "<p>Captures major churches and prominent civic buildings drawn in dense black ink rather than red watercolor.</p>"
         )
-        self.chk_black_bld = QCheckBox("Schwarze Monumentalbauten & Kirchen erfassen")
+        self.chk_black_bld = QCheckBox("Capture Monumental Black Buildings & Churches")
         self.chk_black_bld.setChecked(False)
         self.chk_black_bld.setToolTip(tt_black)
         self.chk_black_bld.toggled.connect(self._trigger_preview_update)
@@ -554,11 +552,10 @@ class TranchotDockWidget(QDockWidget):
 
         # Action Button with tooltip
         tt_run = (
-            "<h3>Gebäude extrahieren</h3>"
-            "<p>Startet die Vektorisierung für das gewählte Siedlungspolygon. Die resultierende Vektorebene wird "
-            "automatisch in historischem Ziegelrot zu QGIS hinzugefügt.</p>"
+            "<h3>Extract Buildings</h3>"
+            "<p>Runs vectorization for the selected settlement polygon. The resulting vector layer is automatically styled in historical brick red and added to QGIS.</p>"
         )
-        self.btn_extract_buildings = QPushButton("🏛️ Gebäude extrahieren")
+        self.btn_extract_buildings = QPushButton("🏛️ Extract Buildings")
         self.btn_extract_buildings.setToolTip(tt_run)
         self.btn_extract_buildings.setStyleSheet(
             "background-color: #b22222; color: white; font-weight: bold; padding: 8px; border-radius: 4px;"
@@ -567,7 +564,7 @@ class TranchotDockWidget(QDockWidget):
         layout.addWidget(self.btn_extract_buildings)
 
         layout.addStretch(1)
-        self.tabs.addTab(tab, "🏛️ Gebäude")
+        self.tabs.addTab(tab, "🏛️ Buildings")
 
     def _create_landuse_tab(self):
         """Creates Tab 2: Land-Use Classification."""
@@ -577,56 +574,56 @@ class TranchotDockWidget(QDockWidget):
         layout.setSpacing(8)
 
         # 1. Dedicated Land Use ROI
-        roi_group = QGroupBox("A. Untersuchungsgebiet (Landnutzung)")
+        roi_group = QGroupBox("A. Area of Interest (Land Use)")
         roi_layout = QVBoxLayout(roi_group)
 
         btn_box = QHBoxLayout()
-        self.btn_lu_roi = QPushButton("📐 Landnutzungs-Polygon einzeichnen")
-        self.btn_lu_roi.setToolTip("Klicke punktweise auf die Karte, um ein beliebiges Polygon für die Landnutzung zu zeichnen (Rechtsklick/Doppelklick zum Abschließen).")
+        self.btn_lu_roi = QPushButton("📐 Draw Land Use Polygon")
+        self.btn_lu_roi.setToolTip("Click points on the canvas to draw an arbitrary polygon for land use (Right-click / double-click to finish).")
         self.btn_lu_roi.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
         self.btn_lu_roi.clicked.connect(self._activate_lu_roi_tool)
         btn_box.addWidget(self.btn_lu_roi)
 
-        self.btn_clear_lu_roi = QPushButton("❌ Zurücksetzen")
-        self.btn_clear_lu_roi.setToolTip("Untersuchungsgebiet zurücksetzen")
+        self.btn_clear_lu_roi = QPushButton("❌ Reset")
+        self.btn_clear_lu_roi.setToolTip("Reset area of interest")
         self.btn_clear_lu_roi.clicked.connect(self._clear_lu_roi)
         btn_box.addWidget(self.btn_clear_lu_roi)
         roi_layout.addLayout(btn_box)
 
         # Scope Radio Buttons
         scope_box = QHBoxLayout()
-        self.rb_lu_roi = QRadioButton("Gezeichnetes Gebiet (ROI)", checked=True)
-        self.rb_lu_sheet = QRadioButton("Gesamtblatt")
+        self.rb_lu_roi = QRadioButton("Drawn Area (ROI)", checked=True)
+        self.rb_lu_sheet = QRadioButton("Full Map Sheet")
         self.rb_lu_roi.toggled.connect(self._trigger_lu_preview_update)
         self.rb_lu_sheet.toggled.connect(self._trigger_lu_preview_update)
         scope_box.addWidget(self.rb_lu_roi)
         scope_box.addWidget(self.rb_lu_sheet)
         roi_layout.addLayout(scope_box)
 
-        self.lu_roi_info_lbl = QLabel("Untersuchungsgebiet: Noch kein Polygon gezeichnet (oben einzeichnen oder Gesamtblatt wählen)")
+        self.lu_roi_info_lbl = QLabel("Area of Interest: No polygon drawn yet (draw above or select Full Map Sheet)")
         self.lu_roi_info_lbl.setStyleSheet("color: #888888; font-size: 10px;")
         roi_layout.addWidget(self.lu_roi_info_lbl)
         layout.addWidget(roi_group)
 
         # 2. Multi-Nuance Pipette Sampler
-        pip_group = QGroupBox("B. Farbmuster-Sampling (Mehrere Nuancen)")
+        pip_group = QGroupBox("B. Color Nuance Sampling (Multiple Nuances)")
         pip_layout = QVBoxLayout(pip_group)
 
         row_class = QHBoxLayout()
-        row_class.addWidget(QLabel("Ziel-Klasse:"))
+        row_class.addWidget(QLabel("Target Class:"))
         self.combo_lu_sample_class = QComboBox()
-        self.combo_lu_sample_class.addItem("🌲 Wald", "forest")
-        self.combo_lu_sample_class.addItem("🌱 Wiese & Weide", "meadow")
-        self.combo_lu_sample_class.addItem("💧 Gewässer", "water")
-        self.combo_lu_sample_class.addItem("🏡 Gärten & Nutzkulturen", "garden")
-        self.combo_lu_sample_class.addItem("🍇 Weinberge & Hänge", "vineyard")
-        self.combo_lu_sample_class.addItem("🏖️ Kies- & Sandbänke", "gravel")
+        self.combo_lu_sample_class.addItem("🌲 Forest", "forest")
+        self.combo_lu_sample_class.addItem("🌱 Meadow & Pasture", "meadow")
+        self.combo_lu_sample_class.addItem("💧 Water Bodies", "water")
+        self.combo_lu_sample_class.addItem("🏡 Gardens & Cultivated Land", "garden")
+        self.combo_lu_sample_class.addItem("🍇 Vineyards & Slopes", "vineyard")
+        self.combo_lu_sample_class.addItem("🏖️ Gravel & Sandbars", "gravel")
         row_class.addWidget(self.combo_lu_sample_class, 1)
         pip_layout.addLayout(row_class)
 
         # Radius slider for sampling
         row_rad = QHBoxLayout()
-        row_rad.addWidget(QLabel("Stempel-Radius (px):"))
+        row_rad.addWidget(QLabel("Stamp Radius (px):"))
         self.spin_stamp_radius = QSpinBox()
         self.spin_stamp_radius.setRange(4, 80)
         self.spin_stamp_radius.setValue(20)
@@ -640,38 +637,38 @@ class TranchotDockWidget(QDockWidget):
         pip_layout.addLayout(row_rad)
 
         btn_sampling_box = QHBoxLayout()
-        self.btn_lu_sample_stamp = QPushButton("🎯 Punkt-Nuance stempeln")
-        self.btn_lu_sample_stamp.setToolTip("Klicke punktuell auf die Karte, um ein kreisrundes Farbmuster für die gewählte Klasse zu lernen (Rechtsklick/Esc zum Beenden).")
+        self.btn_lu_sample_stamp = QPushButton("🎯 Stamp Point Nuance")
+        self.btn_lu_sample_stamp.setToolTip("Click points on the map canvas to learn circular color/texture samples for the selected class (Right-click/Esc to finish).")
         self.btn_lu_sample_stamp.setStyleSheet("background-color: #e65100; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
         self.btn_lu_sample_stamp.clicked.connect(self._activate_lu_stamp_tool)
         btn_sampling_box.addWidget(self.btn_lu_sample_stamp)
 
-        self.btn_lu_sample_poly = QPushButton("📐 Muster-Polygon zeichnen")
-        self.btn_lu_sample_poly.setToolTip("Zeichne ein unregelmäßiges Polygon auf die Karte (z.B. um einen Waldhang), um die Farb- und Texturnuance des gesamten Gebiets zu erfassen.")
+        self.btn_lu_sample_poly = QPushButton("📐 Draw Sample Polygon")
+        self.btn_lu_sample_poly.setToolTip("Draw an irregular polygon on the canvas (e.g. around a forest slope) to capture color and texture nuances across the entire enclosed area.")
         self.btn_lu_sample_poly.setStyleSheet("background-color: #f57c00; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
         self.btn_lu_sample_poly.clicked.connect(self._activate_lu_sample_poly_tool)
         btn_sampling_box.addWidget(self.btn_lu_sample_poly)
         pip_layout.addLayout(btn_sampling_box)
 
-        self.lbl_lu_stamps_summary = QLabel("0 Nuancen gesampelt (Standard-Farbprofile aktiv)")
+        self.lbl_lu_stamps_summary = QLabel("0 nuances sampled (default color profiles active)")
         self.lbl_lu_stamps_summary.setStyleSheet("color: #888888; font-size: 10px;")
         pip_layout.addWidget(self.lbl_lu_stamps_summary)
 
         btn_clear_box = QHBoxLayout()
-        self.btn_clear_class_stamps = QPushButton("🗑️ Nuancen d. Klasse leeren")
-        self.btn_clear_class_stamps.setToolTip("Löscht die gelernten Stempel/Nuancen für die aktuell gewählte Klasse.")
+        self.btn_clear_class_stamps = QPushButton("🗑️ Clear Class Nuances")
+        self.btn_clear_class_stamps.setToolTip("Clears all sampled stamps and polygons for the currently selected class.")
         self.btn_clear_class_stamps.clicked.connect(self._clear_class_stamps)
         btn_clear_box.addWidget(self.btn_clear_class_stamps)
 
-        self.btn_reset_all_stamps = QPushButton("🔄 Alle zurücksetzen")
-        self.btn_reset_all_stamps.setToolTip("Setzt alle Farbprofile aller Klassen auf die historischen Standardwerte zurück.")
+        self.btn_reset_all_stamps = QPushButton("🔄 Reset All")
+        self.btn_reset_all_stamps.setToolTip("Resets all color profiles across all classes back to historical defaults.")
         self.btn_reset_all_stamps.clicked.connect(self._reset_all_stamps)
         btn_clear_box.addWidget(self.btn_reset_all_stamps)
         pip_layout.addLayout(btn_clear_box)
         layout.addWidget(pip_group)
 
         # 3. Live Sliders & Parameters
-        param_group = QGroupBox("C. Farbtoleranz- & Glättungs-Regler")
+        param_group = QGroupBox("C. Color Tolerance & Smoothing Controls")
         param_layout = QVBoxLayout(param_group)
         param_layout.setSpacing(8)
 
@@ -720,77 +717,77 @@ class TranchotDockWidget(QDockWidget):
             layout.addLayout(row)
             return sp, sl
 
-        tt_tol = "<h3>Farbtoleranz / Sensitivität (CIE-Lab ΔE)</h3><p>Steuert den Akzeptanzradius im Farbraum. Höhere Werte (28–50) fassen breitere Farbvariationen zusammen, niedrigere Werte (10–22) sind strenger.</p>"
+        tt_tol = "<h3>Color Tolerance / Sensitivity (CIE-Lab ΔE)</h3><p>Controls chromatic acceptance radius in Lab space. Higher values (28–50) group broader color variations together; lower values (10–22) are strictly selective.</p>"
         self.spin_lu_tol, self.slider_lu_tol = add_lu_slider(
-            param_layout, "🎨 Farbtoleranz (CIE-Lab ΔE):", tt_tol,
+            param_layout, "🎨 Color Tolerance (CIE-Lab ΔE):", tt_tol,
             min_v=10, max_v=80, step=1, def_v=28
         )
 
-        tt_tex = "<h3>Textur-Filter (Baumkronen / Schraffur)</h3><p>Gewichtet die Texturvarianz. Höher (1.0–2.0) betont eingestochene Baumkronen im Wald, niedriger (0.0–0.5) reagiert primär auf reine Farblasuren.</p>"
+        tt_tex = "<h3>Texture Filter (Tree Crowns / Hachures)</h3><p>Weights local texture variance. Higher (1.0–2.0) emphasizes engraved tree crown clusters in forests; lower (0.0–0.5) responds primarily to pure watercolor wash.</p>"
         self.spin_lu_tex_w, self.slider_lu_tex_w = add_lu_slider(
-            param_layout, "🌿 Textur-Filter:", tt_tex,
+            param_layout, "🌿 Texture Filter:", tt_tex,
             min_v=0.0, max_v=2.5, step=0.1, def_v=0.6, scale=10.0, decimals=1
         )
 
-        tt_closing = "<h3>Lückenschluss & Glättung (px)</h3><p>Schließt weiße Freiräume zwischen Baumkronen und füllt Löcher innerhalb geschlossener Wald- und Wiesenflächen.</p>"
+        tt_closing = "<h3>Gap Closing & Smoothing (px)</h3><p>Closes white spaces between tree crowns and fills small clearings within contiguous forest and meadow areas.</p>"
         self.spin_lu_closing, self.slider_lu_closing = add_lu_slider(
-            param_layout, "🔄 Lückenschluss & Glättung (px):", tt_closing,
+            param_layout, "🔄 Gap Closing & Smoothing (px):", tt_closing,
             min_v=4, max_v=60, step=1, def_v=18
         )
 
-        tt_area = "<h3>Mindestfläche (px)</h3><p>Filtert isolierte Einzelflecken und Rauschen unterhalb dieser Flächengröße heraus.</p>"
+        tt_area = "<h3>Minimum Area (px)</h3><p>Filters out isolated speckles and noise below this pixel threshold.</p>"
         self.spin_lu_min_area, self.slider_lu_min_area = add_lu_slider(
-            param_layout, "📐 Mindestfläche (px):", tt_area,
+            param_layout, "📐 Minimum Area (px):", tt_area,
             min_v=20, max_v=1500, step=10, def_v=120
         )
 
-        self.chk_lu_live_preview = QCheckBox("⚡ Live-Vorschau (sofortige Reaktion auf Schieberegler)")
+        self.chk_lu_live_preview = QCheckBox("⚡ Live Preview (instant response to sliders)")
         self.chk_lu_live_preview.setChecked(True)
         self.chk_lu_live_preview.toggled.connect(self._on_lu_live_preview_toggled)
         param_layout.addWidget(self.chk_lu_live_preview)
         layout.addWidget(param_group)
 
         # 4. Categories & Final Vectorization
-        cat_group = QGroupBox("D. Kategorien & Vektorisierung")
+        cat_group = QGroupBox("D. Categories & Vectorization")
         cat_layout = QVBoxLayout(cat_group)
-        self.chk_lu_forest = QCheckBox("🌲 Wald (Olivgrün & Baumkronentextur)")
+        self.chk_lu_forest = QCheckBox("🌲 Forest (Olive wash & tree crown texture)")
         self.chk_lu_forest.setChecked(True)
         self.chk_lu_forest.toggled.connect(self._trigger_lu_preview_update)
         cat_layout.addWidget(self.chk_lu_forest)
 
-        self.chk_lu_meadow = QCheckBox("🌱 Wiese & Weide (Cyan-/Grünlasur)")
+        self.chk_lu_meadow = QCheckBox("🌱 Meadow & Pasture (Cyan/green wash)")
         self.chk_lu_meadow.setChecked(True)
         self.chk_lu_meadow.toggled.connect(self._trigger_lu_preview_update)
         cat_layout.addWidget(self.chk_lu_meadow)
 
-        self.chk_lu_water = QCheckBox("💧 Gewässer (Bäche, Flüsse, Teiche)")
+        self.chk_lu_water = QCheckBox("💧 Water Bodies (Streams, rivers, ponds)")
         self.chk_lu_water.setChecked(True)
         self.chk_lu_water.toggled.connect(self._trigger_lu_preview_update)
         cat_layout.addWidget(self.chk_lu_water)
 
-        self.chk_lu_garden = QCheckBox("🏡 Gärten & Nutzkulturen")
+        self.chk_lu_garden = QCheckBox("🏡 Gardens & Cultivated Land")
         self.chk_lu_garden.setChecked(True)
         self.chk_lu_garden.toggled.connect(self._trigger_lu_preview_update)
         cat_layout.addWidget(self.chk_lu_garden)
 
-        self.chk_lu_vineyard = QCheckBox("🍇 Weinberge & Hänge")
+        self.chk_lu_vineyard = QCheckBox("🍇 Vineyards & Slopes")
         self.chk_lu_vineyard.setChecked(True)
         self.chk_lu_vineyard.toggled.connect(self._trigger_lu_preview_update)
         cat_layout.addWidget(self.chk_lu_vineyard)
 
-        self.chk_lu_gravel = QCheckBox("🏖️ Kies- & Sandbänke")
+        self.chk_lu_gravel = QCheckBox("🏖️ Gravel & Sandbars")
         self.chk_lu_gravel.setChecked(False)
         self.chk_lu_gravel.toggled.connect(self._trigger_lu_preview_update)
         cat_layout.addWidget(self.chk_lu_gravel)
         layout.addWidget(cat_group)
 
-        self.btn_extract_landuse = QPushButton("🌲 Landnutzung berechnen & speichern")
+        self.btn_extract_landuse = QPushButton("🌲 Extract & Save Land Use")
         self.btn_extract_landuse.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 8px; border-radius: 4px;")
         self.btn_extract_landuse.clicked.connect(self._run_landuse_extraction)
         layout.addWidget(self.btn_extract_landuse)
 
         layout.addStretch(1)
-        self.tabs.addTab(tab, "🌲 Landnutzung")
+        self.tabs.addTab(tab, "🌲 Land Use")
 
     def _create_text_tab(self):
         """Creates Tab for Text and Toponyms."""
@@ -799,19 +796,19 @@ class TranchotDockWidget(QDockWidget):
         layout.setContentsMargins(6, 6, 6, 6)
 
         info_lbl = QLabel(
-            "Die Texterkennung basiert auf Tesseract-OCR und dem historischen GOV-Gazetteer "
-            "zur automatischen Identifikation von Ortsnamen und Flurbezeichnungen."
+            "Text recognition uses Tesseract OCR and the historical GOV Gazetteer "
+            "for automatic identification of place names and field toponyms."
         )
         info_lbl.setWordWrap(True)
         layout.addWidget(info_lbl)
 
-        btn_extract = QPushButton("🔍 Text & Ortsnamen erkennen (ROI)")
+        btn_extract = QPushButton("🔍 Extract Text & Toponyms (ROI)")
         btn_extract.setStyleSheet("background-color: #0277bd; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
         btn_extract.clicked.connect(self._run_text_extraction)
         layout.addWidget(btn_extract)
 
         layout.addStretch()
-        self.tabs.addTab(tab, "📝 Text & Ortsnamen")
+        self.tabs.addTab(tab, "📝 Text & Toponyms")
 
     def _create_roads_tab(self):
         """Creates Tab 3: Road network."""
@@ -819,11 +816,11 @@ class TranchotDockWidget(QDockWidget):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(6, 6, 6, 6)
 
-        road_group = QGroupBox("Straßen- & Wegenetz-Parameter")
+        road_group = QGroupBox("Road & Path Network Parameters")
         road_layout = QVBoxLayout(road_group)
 
         r_box = QHBoxLayout()
-        r_box.addWidget(QLabel("Kamm-Schwelle (Ridge):"))
+        r_box.addWidget(QLabel("Ridge Threshold:"))
         spin_ridge = QDoubleSpinBox()
         spin_ridge.setRange(10.0, 80.0)
         spin_ridge.setValue(32.0)
@@ -831,7 +828,7 @@ class TranchotDockWidget(QDockWidget):
         road_layout.addLayout(r_box)
 
         l_box = QHBoxLayout()
-        l_box.addWidget(QLabel("Min. Weglänge (px):"))
+        l_box.addWidget(QLabel("Min. Path Length (px):"))
         spin_len = QSpinBox()
         spin_len.setRange(20, 200)
         spin_len.setValue(60)
@@ -839,13 +836,13 @@ class TranchotDockWidget(QDockWidget):
         road_layout.addLayout(l_box)
         layout.addWidget(road_group)
 
-        btn_roads = QPushButton("🛣️ Straßenachsen extrahieren")
+        btn_roads = QPushButton("🛣️ Extract Road Centerlines")
         btn_roads.setStyleSheet("background-color: #8b5a2b; color: white; font-weight: bold; padding: 6px;")
-        btn_roads.clicked.connect(lambda: self.status_lbl.setText("Straßennetz-Extraktion wird initialisiert..."))
+        btn_roads.clicked.connect(lambda: self.status_lbl.setText("Road network extraction initializing..."))
         layout.addWidget(btn_roads)
 
         layout.addStretch(1)
-        self.tabs.addTab(tab, "🛣️ Straßen & Wege")
+        self.tabs.addTab(tab, "🛣️ Roads & Paths")
 
     def _create_system_tab(self):
         """Creates Tab 4: System info and diagnostic tools."""
@@ -853,7 +850,7 @@ class TranchotDockWidget(QDockWidget):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(6, 6, 6, 6)
 
-        diag_group = QGroupBox("Umgebung & Python-Bibliotheken")
+        diag_group = QGroupBox("Environment & Python Libraries")
         diag_layout = QVBoxLayout(diag_group)
 
         # Check key modules
@@ -873,13 +870,13 @@ class TranchotDockWidget(QDockWidget):
                 lbl = QLabel(f"✓ {name}: {ver}")
                 lbl.setStyleSheet("color: #4CAF50; font-size: 11px;")
             except Exception:
-                lbl = QLabel(f"✗ {name}: Nicht installiert")
+                lbl = QLabel(f"✗ {name}: Not installed")
                 lbl.setStyleSheet("color: #F44336; font-size: 11px;")
             diag_layout.addWidget(lbl)
 
         layout.addWidget(diag_group)
 
-        btn_info = QPushButton("ℹ️ Über HistMap Extractor")
+        btn_info = QPushButton("ℹ️ About HistMap Extractor")
         btn_info.clicked.connect(self._show_about_dialog)
         layout.addWidget(btn_info)
 
@@ -1011,7 +1008,7 @@ class TranchotDockWidget(QDockWidget):
                     dist_deg = f.geometry().distance(centroid_4326)
                     dist_m = int(dist_deg * 111320.0)
                     if dist_m < 80:
-                        dist_label = "in Ortslage"
+                        dist_label = "in settlement"
                     elif dist_m < 1000:
                         dist_label = f"{dist_m}m"
                     else:
@@ -1021,9 +1018,9 @@ class TranchotDockWidget(QDockWidget):
                     self.gazetteer_combo.addItem(label, {"name": name, "type": t_val})
 
                 if is_fallback:
-                    self.gazetteer_info_lbl.setText(f"📍 {min(8, len(matches))} Treffer in Umgebung (nächster: {matches[0]['name']})")
+                    self.gazetteer_info_lbl.setText(f"📍 {min(8, len(matches))} matches in vicinity (nearest: {matches[0]['name']})")
                 else:
-                    self.gazetteer_info_lbl.setText(f"📍 {min(8, len(matches))} Treffer innerhalb der Ortslage")
+                    self.gazetteer_info_lbl.setText(f"📍 {min(8, len(matches))} matches within settlement")
                 
                 # Auto-select best match (or keep previously selected match if present in candidates)
                 selected_idx = 1
@@ -1045,7 +1042,7 @@ class TranchotDockWidget(QDockWidget):
                             self.type_combo.setCurrentIndex(idx)
                             break
             else:
-                self.gazetteer_info_lbl.setText("Keine Treffer in der Nähe (Name frei eintippbar).")
+                self.gazetteer_info_lbl.setText("No nearby matches (type name freely).")
                 self.current_gazetteer_match = None
                 
         except Exception as e:
@@ -1081,7 +1078,7 @@ class TranchotDockWidget(QDockWidget):
 
     def _toggle_gazetteer_map_layer(self, checked: bool):
         """Shows or hides the historical GOV gazetteer places directly on the map canvas."""
-        layer_name = "📍 Historische Orte (GOV Gazetteer)"
+        layer_name = "📍 Historical Places (GOV Gazetteer)"
         existing_layers = QgsProject.instance().mapLayersByName(layer_name)
 
         if checked:
@@ -1129,21 +1126,21 @@ class TranchotDockWidget(QDockWidget):
                 QgsProject.instance().layerTreeRoot().insertLayer(0, vl)
 
             self.canvas.refresh()
-            self.status_lbl.setText("📍 Gazetteer-Orte auf Karte eingeblendet.")
+            self.status_lbl.setText("📍 Gazetteer places displayed on map.")
         else:
             if existing_layers:
                 node = QgsProject.instance().layerTreeRoot().findLayer(existing_layers[0].id())
                 if node:
                     node.setItemVisibilityChecked(False)
             self.canvas.refresh()
-            self.status_lbl.setText("📍 Gazetteer-Orte ausgeblendet.")
+            self.status_lbl.setText("📍 Gazetteer places hidden.")
 
     def _activate_gazetteer_picker(self):
         """Activates map tool to select a gazetteer place directly by clicking on the map canvas."""
         if hasattr(self, 'gazetteer_pick_tool') and self.canvas.mapTool() == self.gazetteer_pick_tool:
             self.canvas.unsetMapTool(self.gazetteer_pick_tool)
             self._reset_pick_button()
-            self.status_lbl.setText("Ortsauswahl auf Karte abgebrochen.")
+            self.status_lbl.setText("Place selection on map canceled.")
             return
 
         # Ensure gazetteer places are visible on map
@@ -1155,15 +1152,15 @@ class TranchotDockWidget(QDockWidget):
             self.btn_pick_gazetteer.setStyleSheet(
                 "background-color: #ff9800; color: black; font-weight: bold; padding: 5px 8px; border-radius: 4px;"
             )
-            self.btn_pick_gazetteer.setText("🎯 Klicke auf Ort...")
-            self.status_lbl.setText("📍 Klicke auf einen Punkt oder ein Dorf auf der Karte (Rechtsklick/Esc zum Abbrechen)...")
+            self.btn_pick_gazetteer.setText("🎯 Click on place...")
+            self.status_lbl.setText("📍 Click on a point or village on the canvas (Right-click/Esc to cancel)...")
 
     def _cancel_gazetteer_picker(self):
         """Resets map tool when user cancels gazetteer picking."""
         if hasattr(self, 'gazetteer_pick_tool') and self.canvas.mapTool() == self.gazetteer_pick_tool:
             self.canvas.unsetMapTool(self.gazetteer_pick_tool)
         self._reset_pick_button()
-        self.status_lbl.setText("Ortsauswahl auf Karte abgebrochen.")
+        self.status_lbl.setText("Place selection on map canceled.")
 
     def _reset_pick_button(self):
         """Restores normal appearance of gazetteer pick button."""
@@ -1171,7 +1168,7 @@ class TranchotDockWidget(QDockWidget):
             self.btn_pick_gazetteer.setStyleSheet(
                 "background-color: #e65100; color: white; font-weight: bold; padding: 5px 8px; border-radius: 4px;"
             )
-            self.btn_pick_gazetteer.setText("🎯 Auf Karte wählen")
+            self.btn_pick_gazetteer.setText("🎯 Pick on Map")
 
     def _on_gazetteer_point_picked(self, point: QgsPointXY):
         """Handles map click when picking a place/settlement from the Gazetteer."""
@@ -1184,7 +1181,7 @@ class TranchotDockWidget(QDockWidget):
                         self.gazetteer_index = QgsSpatialIndex(self.gazetteer_layer.getFeatures())
 
             if not self.gazetteer_layer or not self.gazetteer_index:
-                self.status_lbl.setText("Gazetteer-Daten konnten nicht geladen werden.")
+                self.status_lbl.setText("Could not load gazetteer data.")
                 return
 
             crs_canvas = self.canvas.mapSettings().destinationCrs()
@@ -1198,7 +1195,7 @@ class TranchotDockWidget(QDockWidget):
             # Query nearest candidates from spatial index
             candidate_fids = self.gazetteer_index.nearestNeighbor(pt_4326, 10)
             if not candidate_fids:
-                self.status_lbl.setText("Keine Gazetteer-Punkte in der Datenbank gefunden.")
+                self.status_lbl.setText("No gazetteer points found in database.")
                 return
 
             da = QgsDistanceArea()
@@ -1213,7 +1210,7 @@ class TranchotDockWidget(QDockWidget):
                     candidates.append((f, dist_m))
 
             if not candidates:
-                self.status_lbl.setText("Keine gültigen Orte gefunden.")
+                self.status_lbl.setText("No valid places found.")
                 return
 
             candidates.sort(key=lambda item: item[1])
@@ -1231,7 +1228,7 @@ class TranchotDockWidget(QDockWidget):
                 n = str(f["name"]) if f["name"] else "Unknown"
                 tv = str(f["type_value"]) if f["type_value"] else ""
                 if d_m < 80:
-                    dist_lbl = "am Klickpunkt"
+                    dist_lbl = "at click point"
                 elif d_m < 1000:
                     dist_lbl = f"{int(d_m)}m"
                 else:
@@ -1270,19 +1267,19 @@ class TranchotDockWidget(QDockWidget):
                 pass
 
             dist_str = f"{int(best_dist)}m" if best_dist < 1000 else f"{best_dist/1000:.1f}km"
-            info_text = f"🎯 Auf Karte gewählt: {best_name}"
+            info_text = f"🎯 Picked on map: {best_name}"
             if best_type:
                 info_text += f" ({best_type})"
             info_text += f" [{dist_str}]"
             self.gazetteer_info_lbl.setText(info_text)
             self.gazetteer_info_lbl.setStyleSheet("color: #ff9800; font-weight: bold; font-size: 10px;")
-            self.status_lbl.setText(f"🎯 Ort '{best_name}' direkt über Karte ausgewählt.")
+            self.status_lbl.setText(f"🎯 Place '{best_name}' selected directly via map canvas.")
 
             if hasattr(self, 'chk_live_preview') and self.chk_live_preview.isChecked():
                 self._update_live_preview()
 
         except Exception as e:
-            self.status_lbl.setText(f"Fehler bei Ortsauswahl: {e}")
+            self.status_lbl.setText(f"Error picking place: {e}")
         finally:
             if hasattr(self, 'gazetteer_pick_tool') and self.canvas.mapTool() == self.gazetteer_pick_tool:
                 self.canvas.unsetMapTool(self.gazetteer_pick_tool)
@@ -1293,12 +1290,12 @@ class TranchotDockWidget(QDockWidget):
         layer = self.layer_combo.currentLayer()
         if not layer or not isinstance(layer, QgsRasterLayer):
             if not silent:
-                QMessageBox.warning(self, "Keine Rasterkarte", "Bitte wähle zuerst eine historische Rasterkarte aus.")
+                QMessageBox.warning(self, "No Raster Selected", "Please select a historical GeoTIFF first.")
             return
 
         if not hasattr(self, 'current_roi_geom') or self.current_roi_geom is None or self.current_roi_geom.isEmpty():
             if not silent:
-                QMessageBox.information(self, "Keine Ortslage gezeichnet", "Bitte zeichne zuerst ein Polygon um das Dorf.")
+                QMessageBox.information(self, "No Settlement Drawn", "Please draw a polygon around the settlement first.")
             return
 
         features_to_save = getattr(self, 'current_preview_features', [])
@@ -1308,20 +1305,20 @@ class TranchotDockWidget(QDockWidget):
 
         village_name = self.current_gazetteer_match or self.gazetteer_combo.currentText().strip()
         if not village_name or village_name == "None":
-            village_name = "Unbenannte Ortslage"
+            village_name = "Unnamed Settlement"
         elif "(" in village_name:
             village_name = village_name.split("(")[0].strip()
 
         s_type = getattr(self, 'current_type_match', None) or self.type_combo.currentText()
         if s_type == "Default (Building/Courtyard)":
-            s_type = "Dorf"
+            s_type = "Village"
         s_uri = getattr(self, 'current_type_uri', None) or self.type_combo.currentData() or ""
 
         crs_auth = layer.crs().authid() if (layer.crs() and layer.crs().isValid()) else "EPSG:25832"
 
         # 1. Commit Buildings to permanent layer
-        bld_layer_name = f"🏛️ Gebäude ({layer.name()})"
-        bld_layers = QgsProject.instance().mapLayersByName(bld_layer_name) or QgsProject.instance().mapLayersByName(f"🏛️ Buildings ({layer.name()})")
+        bld_layer_name = f"🏛️ Buildings ({layer.name()})"
+        bld_layers = QgsProject.instance().mapLayersByName(bld_layer_name) or QgsProject.instance().mapLayersByName(f"🏛️ Gebäude ({layer.name()})")
         if bld_layers:
             vl_bld = bld_layers[0]
         else:
@@ -1373,8 +1370,8 @@ class TranchotDockWidget(QDockWidget):
             vl_bld.triggerRepaint()
 
         # 2. Commit Settlement Boundary Polygon to permanent layer
-        settlement_layer_name = f"🏘️ Ortslagen ({layer.name()})"
-        settlement_layers = QgsProject.instance().mapLayersByName(settlement_layer_name)
+        settlement_layer_name = f"🏘️ Settlements ({layer.name()})"
+        settlement_layers = QgsProject.instance().mapLayersByName(settlement_layer_name) or QgsProject.instance().mapLayersByName(f"🏘️ Ortslagen ({layer.name()})")
         if settlement_layers:
             vl_settlement = settlement_layers[0]
         else:
@@ -1442,11 +1439,11 @@ class TranchotDockWidget(QDockWidget):
         vl_settlement.triggerRepaint()
 
         # 3. Clean up live preview layer and rubber band
-        for l in QgsProject.instance().mapLayersByName("🔍 Historische Gebäude (Live-Vorschau)"):
+        for l in QgsProject.instance().mapLayersByName("🔍 Historical Buildings (Live Preview)"):
             pr_prev = l.dataProvider()
             pr_prev.deleteFeatures(l.allFeatureIds())
             l.triggerRepaint()
-        for l in QgsProject.instance().mapLayersByName("🔍 Historical Buildings (Live Preview)"):
+        for l in QgsProject.instance().mapLayersByName("🔍 Historische Gebäude (Live-Vorschau)"):
             pr_prev = l.dataProvider()
             pr_prev.deleteFeatures(l.allFeatureIds())
             l.triggerRepaint()
@@ -1464,9 +1461,12 @@ class TranchotDockWidget(QDockWidget):
         self.current_preview_features = []
         self.cached_roi_rgb = None
 
-        msg = f"✓ Dorf '{village_name}' ({len(new_bld_features)} Gebäude) gespeichert! Du kannst das nächste Dorf einzeichnen."
+        msg = f"✓ Settlement '{village_name}' ({len(new_bld_features)} buildings) saved! Ready to draw next settlement."
         self.status_lbl.setText(msg)
-        self.roi_info_lbl.setText(f"Gespeichert: '{village_name}' ({len(new_bld_features)} Gebäude). Bereit für nächstes Dorf.")
+        self.roi_info_lbl.setText(f"Saved: '{village_name}' ({len(new_bld_features)} buildings). Ready for next settlement.")
+        self.canvas.refresh()
+        if not silent:
+            self.status_lbl.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 10px;")
         self.canvas.refresh()
         if not silent:
             self.status_lbl.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 10px;")
@@ -1518,7 +1518,7 @@ class TranchotDockWidget(QDockWidget):
             self.gazetteer_pick_band.hide()
         if self.roi_tool:
             self.roi_tool.reset()
-        self.roi_info_lbl.setText("Gebiet: Noch kein Siedlungspolygon gezeichnet (Button oben nutzen)")
+        self.roi_info_lbl.setText("Area: No settlement polygon drawn yet (use button above)")
         self.roi_info_lbl.setStyleSheet("color: #888888; font-size: 10px;")
         self.btn_roi.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
 
@@ -1528,7 +1528,7 @@ class TranchotDockWidget(QDockWidget):
         for l in QgsProject.instance().mapLayersByName("🔍 Historical Buildings (Live Preview)"):
             QgsProject.instance().removeMapLayer(l.id())
 
-        self.status_lbl.setText("Gebiet zurückgesetzt. Bitte zeichne ein Gebiet mit '📐 Siedlungspolygon einzeichnen'.")
+        self.status_lbl.setText("Area reset. Please draw an area with '📐 Draw Settlement Polygon'.")
         self.canvas.refresh()
 
     def _cache_roi_data(self):
@@ -1699,9 +1699,9 @@ class TranchotDockWidget(QDockWidget):
             )
 
             # Get or create preview vector layer
-            layer_name = "🔍 Historische Gebäude (Live-Vorschau)"
-            preview_layers = QgsProject.instance().mapLayersByName(layer_name) or QgsProject.instance().mapLayersByName("🔍 Historical Buildings (Live Preview)")
-            for old_l in QgsProject.instance().mapLayersByName("🔍 Historical Buildings (Live Preview)"):
+            layer_name = "🔍 Historical Buildings (Live Preview)"
+            preview_layers = QgsProject.instance().mapLayersByName(layer_name) or QgsProject.instance().mapLayersByName("🔍 Historische Gebäude (Live-Vorschau)")
+            for old_l in QgsProject.instance().mapLayersByName("🔍 Historische Gebäude (Live-Vorschau)"):
                 QgsProject.instance().removeMapLayer(old_l.id())
 
             if preview_layers:
@@ -1762,7 +1762,7 @@ class TranchotDockWidget(QDockWidget):
                             f.setAttribute("type", self.current_type_match)
                             f.setAttribute("type_uri", self.current_type_uri)
                         else:
-                            f.setAttribute("type", "Hofanlage / Gehöft" if len(poly.interiors) > 0 else "Gebäude")
+                            f.setAttribute("type", "Courtyard Complex" if len(poly.interiors) > 0 else "Building")
                             
                         f.setAttribute("area_m2", round(float(feat.area_px) * m2_per_px2, 2))
                         f.setAttribute("perimeter_m", round(float(feat.perimeter_px) * abs(px_w), 2))
@@ -1793,16 +1793,16 @@ class TranchotDockWidget(QDockWidget):
             self.canvas.refresh()
 
             self.status_lbl.setText(
-                f"⚡ Live: {len(qgis_features)} Gebäude erkannt | Karminrot={min_excess:.0f}..{max_excess:.0f} | Wandstärke={config.min_building_thickness_px:.1f}px"
+                f"⚡ Live: {len(qgis_features)} buildings detected | Carmine Red={min_excess:.0f}..{max_excess:.0f} | Wall Thickness={config.min_building_thickness_px:.1f}px"
             )
         except Exception as e:
-            self.status_lbl.setText(f"Vorschaufehler: {e}")
+            self.status_lbl.setText(f"Preview error: {e}")
 
     def _set_global_view_mode(self, mode: str):
         """Switches globally between authentic aged scan and normalized de-yellowed map."""
         layer = self.layer_combo.currentLayer()
         if not layer or not isinstance(layer, QgsRasterLayer):
-            self.status_lbl.setText("Kein aktives Kartenblatt ausgewählt.")
+            self.status_lbl.setText("No active raster sheet selected.")
             return
 
         norm_layer_name = f"🎨 {layer.name()} (Normalized)"
@@ -1845,7 +1845,7 @@ class TranchotDockWidget(QDockWidget):
                 if node_orig:
                     node_orig.setItemVisibilityChecked(False)
                 self.canvas.refresh()
-                self.status_lbl.setText("Ansicht: Normalisiert (Entgilbt) aktiv.")
+                self.status_lbl.setText("View: Normalized (De-yellowed) active.")
             else:
                 self._create_global_normalized_layer(layer)
         else:
@@ -1859,17 +1859,17 @@ class TranchotDockWidget(QDockWidget):
                 if node_norm:
                     node_norm.setItemVisibilityChecked(False)
             self.canvas.refresh()
-            self.status_lbl.setText("Ansicht: Original (Gealtertes Papier) aktiv.")
+            self.status_lbl.setText("View: Original (Aged paper) active.")
 
     def _create_global_normalized_layer(self, layer: QgsRasterLayer):
         """Creates and displays the global normalized raster layer for the active map sheet."""
         if ColorEnhancer is None:
-            self.status_lbl.setText("ColorEnhancer-Modul nicht verfügbar.")
+            self.status_lbl.setText("ColorEnhancer module not available.")
             return
 
         raster_path = layer.dataProvider().dataSourceUri()
         if not os.path.exists(raster_path):
-            self.status_lbl.setText("Rasterdatei nicht gefunden.")
+            self.status_lbl.setText("Raster file not found.")
             return
 
         norm_layer_name = f"🎨 {layer.name()} (Normalized)"
@@ -1899,12 +1899,12 @@ class TranchotDockWidget(QDockWidget):
                 for old_l in QgsProject.instance().mapLayersByName(norm_layer_name):
                     QgsProject.instance().removeMapLayer(old_l.id())
 
-                self.status_lbl.setText("Berechne globalen Pergament-Weißabgleich für Kartenblatt...")
+                self.status_lbl.setText("Computing global parchment white-balance for map sheet...")
                 QgsApplication.processEvents()
 
                 ds = gdal.Open(raster_path, gdal.GA_ReadOnly)
                 if ds is None:
-                    self.status_lbl.setText("GDAL konnte Rasterdatei nicht öffnen.")
+                    self.status_lbl.setText("GDAL could not open raster file.")
                     return
 
                 w = ds.RasterXSize
@@ -1969,7 +1969,7 @@ class TranchotDockWidget(QDockWidget):
                         if current_tile % 4 == 0 or current_tile == total_tiles:
                             pct = int((current_tile / total_tiles) * 100)
                             self.progress_bar.setValue(pct)
-                            self.status_lbl.setText(f"Normalisiere Kartenblatt: {pct}% ({current_tile}/{total_tiles} Kacheln)...")
+                            self.status_lbl.setText(f"Normalizing map sheet: {pct}% ({current_tile}/{total_tiles} tiles)...")
                             QgsApplication.processEvents()
 
                 out_ds.FlushCache()
@@ -2028,16 +2028,16 @@ class TranchotDockWidget(QDockWidget):
                     self.layer_combo.blockSignals(False)
 
                 self.canvas.refresh()
-                self.status_lbl.setText("✓ Kartenblatt vollständig normalisiert (entgilbt) und aktiv.")
+                self.status_lbl.setText("✓ Map sheet fully normalized (de-yellowed) and active.")
             else:
-                self.status_lbl.setText("Normalisierte Ebene konnte nicht geladen werden.")
+                self.status_lbl.setText("Failed to load normalized layer.")
         except Exception as e:
-            self.status_lbl.setText(f"Normalisierungsfehler: {e}")
+            self.status_lbl.setText(f"Normalization error: {e}")
 
     def _activate_pipette_tool(self):
         """Activates color pipette tool."""
         self.canvas.setMapTool(self.pipette_tool)
-        self.status_lbl.setText("Klicke auf die Karte, um die Farbe an dieser Stelle aufzunehmen...")
+        self.status_lbl.setText("Click on any feature on the canvas to sample its color...")
         self.btn_pipette.setStyleSheet("background-color: #ff9800; color: black; font-weight: bold;")
 
     def _on_pipette_sampled(self, point):
@@ -2045,7 +2045,7 @@ class TranchotDockWidget(QDockWidget):
         self.btn_pipette.setStyleSheet("")
         layer = self.layer_combo.currentLayer()
         if not layer or not isinstance(layer, QgsRasterLayer):
-            self.status_lbl.setText("Keine gültige Rasterkarte aktiv.")
+            self.status_lbl.setText("No valid raster sheet active.")
             return
 
         try:
@@ -2074,11 +2074,11 @@ class TranchotDockWidget(QDockWidget):
                     )
                 else:
                     self.pip_status_lbl.setText(f"Sample: {res}")
-                self.status_lbl.setText(f"Farbe gesampelt bei X: {sample_pt.x():.1f}, Y: {sample_pt.y():.1f}")
+                self.status_lbl.setText(f"Sampled at X: {sample_pt.x():.1f}, Y: {sample_pt.y():.1f}")
             else:
-                self.pip_status_lbl.setText("Keine Pixeldaten an dieser Position.")
+                self.pip_status_lbl.setText("No pixel data at this location.")
         except Exception as e:
-            self.pip_status_lbl.setText(f"Sampling-Fehler: {e}")
+            self.pip_status_lbl.setText(f"Sampling error: {e}")
 
 
     def _on_layer_changed(self, layer):
@@ -2087,7 +2087,7 @@ class TranchotDockWidget(QDockWidget):
             return
         self._clear_roi()
         if layer and isinstance(layer, QgsRasterLayer):
-            self.status_lbl.setText(f"Aktiv: {layer.name()} ({layer.width()}×{layer.height()} px)")
+            self.status_lbl.setText(f"Active: {layer.name()} ({layer.width()}×{layer.height()} px)")
             norm_layer_name = f"🎨 {layer.name()} (Normalized)"
             norm_layers = QgsProject.instance().mapLayersByName(norm_layer_name)
             if norm_layers:
@@ -2100,26 +2100,26 @@ class TranchotDockWidget(QDockWidget):
                 self.btn_view_norm.setChecked(False)
             self._trigger_preview_update()
         else:
-            self.status_lbl.setText("Bitte ein historisches Kartenblatt auswählen.")
+            self.status_lbl.setText("Please select a historical map sheet.")
 
     def _run_building_extraction(self):
         """Launches the BuildingExtractionTask in background thread."""
         layer = self.layer_combo.currentLayer()
         if not layer or not isinstance(layer, QgsRasterLayer):
-            QMessageBox.warning(self, "Keine Rasterkarte ausgewählt", "Bitte wähle zuerst ein historisches Kartenblatt aus.")
+            QMessageBox.warning(self, "No Raster Selected", "Please select a historical GeoTIFF first.")
             return
 
         raster_path = layer.dataProvider().dataSourceUri()
         if not os.path.exists(raster_path):
-            QMessageBox.critical(self, "Dateifehler", f"Rasterdatei existiert nicht:\n{raster_path}")
+            QMessageBox.critical(self, "File Error", f"Raster file does not exist:\n{raster_path}")
             return
 
         # Strictly require an active ROI: do NOT extract without an ROI!
         if self.current_roi is None or self.current_roi.isEmpty():
             QMessageBox.information(
                 self,
-                "Kein Gebiet ausgewählt",
-                "Bitte zeichne zuerst ein Siedlungspolygon mit '📐 Siedlungspolygon einzeichnen'."
+                "No Area Selected",
+                "Please draw a polygon around the settlement first using '📐 Draw Settlement Polygon'."
             )
             return
 
@@ -2145,12 +2145,12 @@ class TranchotDockWidget(QDockWidget):
         layer_roi = self._transform_canvas_to_layer_rect(self.current_roi, layer)
         layer_geom = self._transform_canvas_to_layer_geom(self.current_roi_geom, layer) if hasattr(self, 'current_roi_geom') and self.current_roi_geom is not None else None
         output_crs = layer.crs().authid() if layer.crs().isValid() else "EPSG:25832"
-        layer_name = f"🏛️ Gebäude ({layer.name()})"
+        layer_name = f"🏛️ Buildings ({layer.name()})"
 
         # Start QgsTask
         self.btn_extract_buildings.setEnabled(False)
         self.progress_bar.setValue(5)
-        self.status_lbl.setText("Gebäude werden extrahiert (authentische Konturen & Innenhof-Subtraktion)...")
+        self.status_lbl.setText("Extracting buildings (authentic contours & courtyard subtraction)...")
 
         self.current_task = BuildingExtractionTask(
             raster_path=raster_path,
@@ -2171,25 +2171,25 @@ class TranchotDockWidget(QDockWidget):
     def _on_task_completed(self, layer_name: str, count: int):
         self.btn_extract_buildings.setEnabled(True)
         self.progress_bar.setValue(100)
-        self.status_lbl.setText(f"Fertig! {count} Gebäude zur Ebene '{layer_name}' hinzugefügt.")
+        self.status_lbl.setText(f"Done! {count} buildings added to layer '{layer_name}'.")
 
         # Remove preview vector layer now that permanent layer is committed
-        for l in QgsProject.instance().mapLayersByName("🔍 Historische Gebäude (Live-Vorschau)"):
-            QgsProject.instance().removeMapLayer(l.id())
         for l in QgsProject.instance().mapLayersByName("🔍 Historical Buildings (Live Preview)"):
+            QgsProject.instance().removeMapLayer(l.id())
+        for l in QgsProject.instance().mapLayersByName("🔍 Historische Gebäude (Live-Vorschau)"):
             QgsProject.instance().removeMapLayer(l.id())
 
         if count == 0:
             QMessageBox.information(
-                self, "Keine Gebäude gefunden",
-                "In diesem Bereich wurden keine Gebäude erkannt.\nTipp: Schwellenwerte für Karminrot oder Wandstärke anpassen."
+                self, "No Buildings Found",
+                "No buildings were detected in this area.\nTip: Adjust the Carmine Red threshold sliders."
             )
 
     def _on_task_failed(self, error_msg: str):
         self.btn_extract_buildings.setEnabled(True)
         self.progress_bar.setValue(0)
-        self.status_lbl.setText(f"Fehler: {error_msg}")
-        QMessageBox.critical(self, "Extraktionsfehler", f"Gebäudeextraktion fehlgeschlagen:\n{error_msg}")
+        self.status_lbl.setText(f"Error: {error_msg}")
+        QMessageBox.critical(self, "Extraction Error", f"Building extraction failed:\n{error_msg}")
 
     # -------------------------------------------------------------------------
     # Land Use Methods: Dedicated ROI, Multi-Nuance Sampling & Live Preview
@@ -2197,7 +2197,7 @@ class TranchotDockWidget(QDockWidget):
     def _activate_lu_roi_tool(self):
         """Switches QGIS map tool to Land Use polygon drawing mode."""
         self.canvas.setMapTool(self.lu_roi_tool)
-        self.status_lbl.setText("Landnutzungs-Gebiet zeichnen (Rechtsklick / Doppelklick zum Abschließen)...")
+        self.status_lbl.setText("Draw land use area (Right-click / double-click to finish)...")
         self.btn_lu_roi.setStyleSheet("background-color: #ff9800; color: black; font-weight: bold; padding: 6px; border-radius: 4px;")
 
     def _on_lu_polygon_roi_selected(self, geom: QgsGeometry):
@@ -2208,7 +2208,7 @@ class TranchotDockWidget(QDockWidget):
         self.current_lu_roi = geom.boundingBox()
         ha = geom.area() / 10000.0
         self.lu_roi_info_lbl.setText(
-            f"Landnutzungs-Gebiet: Fläche ≈ {geom.area():.0f} m² ({ha:.2f} ha)"
+            f"Land Use Area: Area ≈ {geom.area():.0f} m² ({ha:.2f} ha)"
         )
         self.lu_roi_info_lbl.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 10px;")
         self.btn_lu_roi.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
@@ -2245,7 +2245,7 @@ class TranchotDockWidget(QDockWidget):
         if hasattr(self, 'lu_roi_tool') and self.lu_roi_tool:
             self.lu_roi_tool.reset()
         if hasattr(self, 'lu_roi_info_lbl'):
-            self.lu_roi_info_lbl.setText("Untersuchungsgebiet: Noch kein Polygon gezeichnet")
+            self.lu_roi_info_lbl.setText("Area of Interest: No polygon drawn yet")
             self.lu_roi_info_lbl.setStyleSheet("color: #888888; font-size: 10px;")
         if hasattr(self, 'btn_lu_roi'):
             self.btn_lu_roi.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
@@ -2253,8 +2253,10 @@ class TranchotDockWidget(QDockWidget):
         # Remove preview vector layer if present
         for l in QgsProject.instance().mapLayersByName("🔍 Land Use (Live Preview)"):
             QgsProject.instance().removeMapLayer(l.id())
+        for l in QgsProject.instance().mapLayersByName("🔍 Landnutzung (Live-Vorschau)"):
+            QgsProject.instance().removeMapLayer(l.id())
 
-        self.status_lbl.setText("Landnutzungs-Gebiet zurückgesetzt.")
+        self.status_lbl.setText("Land use area reset.")
         self.canvas.refresh()
 
     def _cache_lu_roi_data(self):
@@ -2320,9 +2322,9 @@ class TranchotDockWidget(QDockWidget):
         if hasattr(self, 'lu_stamp_tool'):
             self.canvas.setMapTool(self.lu_stamp_tool)
             self.btn_lu_sample_stamp.setStyleSheet("background-color: #ff9800; color: black; font-weight: bold; padding: 6px; border-radius: 4px;")
-            self.btn_lu_sample_stamp.setText("🎯 Klicke auf Karte (Nuance lernen)...")
+            self.btn_lu_sample_stamp.setText("🎯 Click on map (sampling nuance)...")
             cid = self.combo_lu_sample_class.currentData()
-            self.status_lbl.setText(f"📍 Klicke auf die Karte, um Farbmuster für '{cid}' zu lernen (Rechtsklick/Esc zum Beenden)...")
+            self.status_lbl.setText(f"📍 Click on map to sample color nuances for '{cid}' (Right-click/Esc to finish)...")
 
     def _finish_lu_stamp_sampling(self):
         """Finishes stamp sampling mode."""
@@ -2330,14 +2332,14 @@ class TranchotDockWidget(QDockWidget):
             self.canvas.unsetMapTool(self.lu_stamp_tool)
         if hasattr(self, 'btn_lu_sample_stamp'):
             self.btn_lu_sample_stamp.setStyleSheet("background-color: #e65100; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
-            self.btn_lu_sample_stamp.setText("🎯 Farbmuster auf Karte aufnehmen")
-        self.status_lbl.setText("Farbmuster-Sampling beendet.")
+            self.btn_lu_sample_stamp.setText("🎯 Stamp Point Nuance")
+        self.status_lbl.setText("Color sample stamping finished.")
 
     def _on_lu_stamp_sampled(self, point: QgsPointXY):
         """Callback when user clicks canvas to sample a color/texture nuance for a land use class."""
         layer = self.layer_combo.currentLayer()
         if not layer or not isinstance(layer, QgsRasterLayer):
-            self.status_lbl.setText("Keine gültige Rasterkarte aktiv.")
+            self.status_lbl.setText("No valid raster map active.")
             return
 
         raster_path = layer.dataProvider().dataSourceUri()
@@ -2426,7 +2428,7 @@ class TranchotDockWidget(QDockWidget):
             total_stamps = sum(len(s.stamps) for s in self.pipette_sampler.samples.values())
             class_stamps = len(self.pipette_sampler.get_stamps(target_cid))
             self.status_lbl.setText(
-                f"✓ Nuance #{entry.stamp_id} für '{target_cid}' erfasst ({entry.hex_color})! {class_stamps} Nuancen aktiv ({total_stamps} gesamt). Klicke weiter für weitere Nuancen."
+                f"✓ Nuance #{entry.stamp_id} for '{target_cid}' captured ({entry.hex_color})! {class_stamps} nuances active ({total_stamps} total). Click again for more nuances."
             )
 
             # Re-trigger live preview
@@ -2442,9 +2444,9 @@ class TranchotDockWidget(QDockWidget):
         if hasattr(self, 'lu_sample_poly_tool'):
             self.canvas.setMapTool(self.lu_sample_poly_tool)
             self.btn_lu_sample_poly.setStyleSheet("background-color: #ff9800; color: black; font-weight: bold; padding: 6px; border-radius: 4px;")
-            self.btn_lu_sample_poly.setText("📐 Zeichne Nuancen-Polygon...")
+            self.btn_lu_sample_poly.setText("📐 Drawing Sample Polygon...")
             cid = self.combo_lu_sample_class.currentData()
-            self.status_lbl.setText(f"📐 Zeichne ein Polygon um einen Bereich für '{cid}' (Rechtsklick/Doppelklick zum Abschließen)...")
+            self.status_lbl.setText(f"📐 Draw a polygon around an area for '{cid}' (Right-click/double-click to finish)...")
 
     def _cancel_lu_sample_poly(self):
         """Resets map tool when polygon sampling is canceled or completed."""
@@ -2452,14 +2454,14 @@ class TranchotDockWidget(QDockWidget):
             self.canvas.unsetMapTool(self.lu_sample_poly_tool)
         if hasattr(self, 'btn_lu_sample_poly'):
             self.btn_lu_sample_poly.setStyleSheet("background-color: #f57c00; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
-            self.btn_lu_sample_poly.setText("📐 Muster-Polygon zeichnen")
-        self.status_lbl.setText("Muster-Polygon-Sampling beendet.")
+            self.btn_lu_sample_poly.setText("📐 Draw Sample Polygon")
+        self.status_lbl.setText("Sample polygon drawing finished.")
 
     def _on_lu_sample_polygon_drawn(self, geom: QgsGeometry):
         """Callback when user completes drawing a sample polygon on canvas."""
         layer = self.layer_combo.currentLayer()
         if not layer or not isinstance(layer, QgsRasterLayer):
-            self.status_lbl.setText("Keine gültige Rasterkarte aktiv.")
+            self.status_lbl.setText("No valid raster map active.")
             self._cancel_lu_sample_poly()
             return
 
@@ -2568,7 +2570,7 @@ class TranchotDockWidget(QDockWidget):
             total_stamps = sum(len(s.stamps) for s in self.pipette_sampler.samples.values())
             class_stamps = len(self.pipette_sampler.get_stamps(target_cid))
             self.status_lbl.setText(
-                f"✓ Nuance aus Polygon für '{target_cid}' erfasst ({entry.hex_color}, {entry.distilled_pixels} px)! {class_stamps} Nuancen aktiv ({total_stamps} gesamt)."
+                f"✓ Nuance from polygon captured for '{target_cid}' ({entry.hex_color}, {entry.distilled_pixels} px)! {class_stamps} nuances active ({total_stamps} total)."
             )
 
             if hasattr(self, 'chk_lu_live_preview') and self.chk_lu_live_preview.isChecked():
@@ -2582,12 +2584,12 @@ class TranchotDockWidget(QDockWidget):
             return
         parts = []
         labels = {
-            "forest": "🌲 Wald",
-            "meadow": "🌱 Wiese",
-            "water": "💧 Gewässer",
-            "garden": "🏡 Gärten",
-            "vineyard": "🍇 Weinberge",
-            "gravel": "🏖️ Kies",
+            "forest": "🌲 Forest",
+            "meadow": "🌱 Meadow",
+            "water": "💧 Water",
+            "garden": "🏡 Gardens",
+            "vineyard": "🍇 Vineyards",
+            "gravel": "🏖️ Gravel",
         }
         total = 0
         for cid, lbl in labels.items():
@@ -2597,11 +2599,11 @@ class TranchotDockWidget(QDockWidget):
                 total += cnt
 
         if parts:
-            summary = " | ".join(parts) + f" (Gesamt: {total})"
-            self.lbl_lu_stamps_summary.setText(f"🎨 Aktive Nuancen: {summary}")
+            summary = " | ".join(parts) + f" (Total: {total})"
+            self.lbl_lu_stamps_summary.setText(f"🎨 Active Nuances: {summary}")
             self.lbl_lu_stamps_summary.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 10px;")
         else:
-            self.lbl_lu_stamps_summary.setText("0 Nuancen gesampelt (Standard-Farbprofile aktiv)")
+            self.lbl_lu_stamps_summary.setText("0 nuances sampled (default color profiles active)")
             self.lbl_lu_stamps_summary.setStyleSheet("color: #888888; font-size: 10px;")
 
     def _clear_class_stamps(self):
@@ -2622,7 +2624,7 @@ class TranchotDockWidget(QDockWidget):
         self.lu_stamp_rubber_bands = remaining_bands
 
         self._update_lu_stamps_summary()
-        self.status_lbl.setText(f"Nuancen für '{target_cid}' geleert. Standard-Profil wieder aktiv.")
+        self.status_lbl.setText(f"Nuances for '{target_cid}' cleared. Default profile restored.")
         if hasattr(self, 'chk_lu_live_preview') and self.chk_lu_live_preview.isChecked():
             self._trigger_lu_preview_update()
 
@@ -2636,7 +2638,7 @@ class TranchotDockWidget(QDockWidget):
             rb.hide()
         self.lu_stamp_rubber_bands.clear()
         self._update_lu_stamps_summary()
-        self.status_lbl.setText("Alle Farbnuancen zurückgesetzt auf Standard-Profile.")
+        self.status_lbl.setText("All color nuances reset to default profiles.")
         if hasattr(self, 'chk_lu_live_preview') and self.chk_lu_live_preview.isChecked():
             self._trigger_lu_preview_update()
 
@@ -2706,13 +2708,16 @@ class TranchotDockWidget(QDockWidget):
                 image_rgb, active_class_ids=enabled_cats, closing_kernel_px=closing_val
             )
         except Exception as e:
-            self.status_lbl.setText(f"Vorschaufehler: {e}")
+            self.status_lbl.setText(f"Preview error: {e}")
             return
 
-        layer_name = "🔍 Landnutzung (Live-Vorschau)"
+        layer_name = "🔍 Land Use (Live Preview)"
         existing = QgsProject.instance().mapLayersByName(layer_name)
-        for old_l in QgsProject.instance().mapLayersByName("🔍 Land Use (Live Preview)"):
+        for old_l in QgsProject.instance().mapLayersByName("🔍 Landnutzung (Live-Vorschau)"):
             QgsProject.instance().removeMapLayer(old_l.id())
+        for old_l in QgsProject.instance().mapLayersByName("🔍 Land Use (Live Preview)"):
+            if not existing or old_l.id() != existing[0].id():
+                QgsProject.instance().removeMapLayer(old_l.id())
 
         if existing:
             vl_prev = existing[0]
@@ -2729,12 +2734,12 @@ class TranchotDockWidget(QDockWidget):
             vl_prev.updateFields()
 
             categories = [
-                ("forest", "Wald", "46,125,50,150", "27,94,32,230"),
-                ("meadow", "Wiese & Weide", "0,206,201,150", "0,150,140,230"),
-                ("water", "Gewässer", "9,132,227,180", "13,71,161,240"),
-                ("garden", "Gärten & Nutzkulturen", "253,203,110,150", "200,160,50,230"),
-                ("vineyard", "Weinberge & Hänge", "214,48,49,150", "150,30,30,230"),
-                ("gravel", "Kies- & Sandbänke", "225,112,85,150", "180,80,50,230"),
+                ("forest", "Forest", "46,125,50,150", "27,94,32,230"),
+                ("meadow", "Meadow & Pasture", "0,206,201,150", "0,150,140,230"),
+                ("water", "Water Bodies", "9,132,227,180", "13,71,161,240"),
+                ("garden", "Gardens & Cultivated Land", "253,203,110,150", "200,160,50,230"),
+                ("vineyard", "Vineyards & Slopes", "214,48,49,150", "150,30,30,230"),
+                ("gravel", "Gravel & Sandbars", "225,112,85,150", "180,80,50,230"),
             ]
             cats = []
             for cat_val, cat_lbl, fill_col, border_col in categories:
@@ -2760,12 +2765,12 @@ class TranchotDockWidget(QDockWidget):
         m2_per_px2 = abs(px_w * px_h)
 
         category_label_map = {
-            "forest": "Wald",
-            "meadow": "Wiese & Weide",
-            "water": "Gewässer",
-            "garden": "Gärten & Nutzkulturen",
-            "vineyard": "Weinberge & Hänge",
-            "gravel": "Kies- & Sandbänke",
+            "forest": "Forest",
+            "meadow": "Meadow & Pasture",
+            "water": "Water Bodies",
+            "garden": "Gardens & Cultivated Land",
+            "vineyard": "Vineyards & Slopes",
+            "gravel": "Gravel & Sandbars",
         }
 
         for cat, plist in polys_by_class.items():
@@ -2798,18 +2803,18 @@ class TranchotDockWidget(QDockWidget):
         vl_prev.updateExtents()
         vl_prev.triggerRepaint()
         self.canvas.refresh()
-        self.status_lbl.setText(f"🔍 Landnutzung Live-Vorschau: {len(new_feats)} Flächen erkannt.")
+        self.status_lbl.setText(f"🔍 Land Use Live Preview: {len(new_feats)} areas detected.")
 
     def _run_landuse_extraction(self):
         """Launches the LandUseExtractionTask in background thread."""
         layer = self.layer_combo.currentLayer()
         if not layer or not isinstance(layer, QgsRasterLayer):
-            QMessageBox.warning(self, "Keine Rasterkarte ausgewählt", "Bitte wähle zuerst ein historisches Kartenblatt aus.")
+            QMessageBox.warning(self, "No Raster Map Selected", "Please select an active historical map sheet first.")
             return
 
         raster_path = layer.dataProvider().dataSourceUri()
         if not os.path.exists(raster_path):
-            QMessageBox.critical(self, "Dateifehler", f"Rasterdatei existiert nicht:\n{raster_path}")
+            QMessageBox.critical(self, "File Error", f"Raster file does not exist:\n{raster_path}")
             return
 
         # Determine enabled categories
@@ -2830,8 +2835,8 @@ class TranchotDockWidget(QDockWidget):
         if not enabled_cats:
             QMessageBox.information(
                 self,
-                "Keine Kategorien gewählt",
-                "Bitte wähle mindestens eine Landnutzungskategorie zur Extraktion aus."
+                "No Categories Selected",
+                "Please select at least one land use category for extraction."
             )
             return
 
@@ -2847,8 +2852,8 @@ class TranchotDockWidget(QDockWidget):
             else:
                 QMessageBox.information(
                     self,
-                    "Kein Gebiet ausgewählt",
-                    "Bitte zeichne zuerst ein Polygon mit '📐 Landnutzungs-Polygon einzeichnen' oder wähle 'Gesamtblatt'."
+                    "No Area Selected",
+                    "Please draw a polygon first with '📐 Draw Land Use Polygon' or select 'Full Map Sheet'."
                 )
                 return
         else:
@@ -2875,12 +2880,12 @@ class TranchotDockWidget(QDockWidget):
                 s.texture_weight = tex_w_val
 
         output_crs = layer.crs().authid() if layer.crs().isValid() else "EPSG:25832"
-        layer_name = f"🌲 Landnutzung ({layer.name()})"
+        layer_name = f"🌲 Land Use ({layer.name()})"
 
         # Start QgsTask
         self.btn_extract_landuse.setEnabled(False)
         self.progress_bar.setValue(5)
-        self.status_lbl.setText("Historische Landnutzungsklassen werden berechnet...")
+        self.status_lbl.setText("Calculating historical land use classes...")
 
         self.current_task = LandUseExtractionTask(
             raster_path=raster_path,
@@ -2901,7 +2906,7 @@ class TranchotDockWidget(QDockWidget):
     def _on_landuse_task_completed(self, layer_name: str, count: int):
         self.btn_extract_landuse.setEnabled(True)
         self.progress_bar.setValue(100)
-        self.status_lbl.setText(f"Fertig! {count} Landnutzungsflächen in '{layer_name}' klassifiziert.")
+        self.status_lbl.setText(f"Done! {count} land use features classified into '{layer_name}'.")
 
         # Remove preview vector layer now that permanent extraction is finished
         for l in QgsProject.instance().mapLayersByName("🔍 Landnutzung (Live-Vorschau)"):
@@ -2911,37 +2916,37 @@ class TranchotDockWidget(QDockWidget):
 
         if count == 0:
             QMessageBox.information(
-                self, "Keine Landnutzung gefunden",
-                "In diesem Bereich wurden keine Flächen der gewählten Klassen erkannt.\nTipp: Prüfe die Farbtoleranz oder erfasse zusätzliche Nuancen."
+                self, "No Land Use Found",
+                "No areas of the selected classes were detected in this region.\nTip: Check color tolerance or capture additional nuances."
             )
 
     def _on_landuse_task_failed(self, error_msg: str):
         self.btn_extract_landuse.setEnabled(True)
         self.progress_bar.setValue(0)
-        self.status_lbl.setText(f"Fehler: {error_msg}")
-        QMessageBox.critical(self, "Klassifikationsfehler", f"Landnutzungsextraktion fehlgeschlagen:\n{error_msg}")
+        self.status_lbl.setText(f"Error: {error_msg}")
+        QMessageBox.critical(self, "Classification Error", f"Land use extraction failed:\n{error_msg}")
 
     def _run_text_extraction(self):
         layer = self.layer_combo.currentLayer()
         if not layer or not isinstance(layer, QgsRasterLayer):
-            QMessageBox.warning(self, "Keine Rasterkarte", "Bitte wähle zuerst ein historisches Kartenblatt aus.")
+            QMessageBox.warning(self, "No Raster Map", "Please select an active historical map sheet first.")
             return
 
         raster_path = layer.dataProvider().dataSourceUri()
         if not os.path.exists(raster_path):
-            QMessageBox.critical(self, "Dateifehler", f"Rasterdatei existiert nicht:\n{raster_path}")
+            QMessageBox.critical(self, "File Error", f"Raster file does not exist:\n{raster_path}")
             return
             
         if self.current_roi is None or self.current_roi.isEmpty():
             QMessageBox.information(
                 self,
-                "Kein Gebiet gewählt",
-                "Bitte zeichne zuerst ein Siedlungspolygon im Gebäude-Reiter mit '📐 Siedlungspolygon einzeichnen'."
+                "No Area Selected",
+                "Please draw a settlement polygon first in the Buildings tab with '📐 Draw Settlement Polygon'."
             )
             return
 
         if TextConfig is None or TextExtractionTask is None:
-            QMessageBox.critical(self, "Engine-Fehler", "Tranchot-Backend nicht gefunden oder inkompatibel.")
+            QMessageBox.critical(self, "Engine Error", "Tranchot backend not found or incompatible.")
             return
 
         layer_roi = self._transform_canvas_to_layer_rect(self.current_roi, layer)
@@ -2953,14 +2958,14 @@ class TranchotDockWidget(QDockWidget):
             config=config,
             roi_extent=layer_roi,
             roi_geometry=layer_geom,
-            layer_name="Tranchot_Toponyme",
+            layer_name="Tranchot_Toponyms",
             output_crs=layer.crs().authid()
         )
         task.task_completed.connect(self._on_text_extraction_completed)
         task.task_failed.connect(self._on_text_extraction_failed)
 
         QgsApplication.taskManager().addTask(task)
-        self.status_lbl.setText("Texterkennung & Toponyme werden berechnet...")
+        self.status_lbl.setText("Calculating text recognition & toponyms...")
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setStyleSheet("QProgressBar::chunk { background-color: #0277bd; }")
 
@@ -2968,7 +2973,7 @@ class TranchotDockWidget(QDockWidget):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
         self.progress_bar.setStyleSheet("")
-        self.status_lbl.setText(f"Texterkennung abgeschlossen! {count} Beschriftungen erkannt.")
+        self.status_lbl.setText(f"Text recognition completed! {count} labels detected.")
         
         if count > 0:
             layer = QgsProject.instance().mapLayersByName(layer_name)
@@ -2979,19 +2984,19 @@ class TranchotDockWidget(QDockWidget):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setStyleSheet("")
-        self.status_lbl.setText("Texterkennung fehlgeschlagen.")
-        QMessageBox.critical(self, "Fehler bei Texterkennung", f"Texterkennung fehlgeschlagen:\n{error_msg}")
+        self.status_lbl.setText("Text recognition failed.")
+        QMessageBox.critical(self, "Text Recognition Error", f"Text recognition failed:\n{error_msg}")
 
     def _show_about_dialog(self):
         QMessageBox.about(
             self,
-            "Über HistMap Extractor",
+            "About HistMap Extractor",
             "<h3>🗺️ HistMap Extractor QGIS Plugin</h3>"
             "<p><b>Version:</b> 1.1.0<br>"
-            "<b>Entwickelt vom:</b> Bonn Center for Digital Humanities (BCDH), Universität Bonn<br>"
-            "<b>Lizenz:</b> MIT Lizenz</p>"
-            "<p>Präzise KI- und Computer-Vision-Vektorisierung historischer Kartenblätter "
-            "(Tranchot / v. Müffling 1801–1828, Preußische Uraufnahme u.a.).</p>"
+            "<b>Developed by:</b> Bonn Center for Digital Humanities (BCDH), University of Bonn<br>"
+            "<b>License:</b> MIT License</p>"
+            "<p>Precise AI and computer vision vectorization for historical map sheets "
+            "(Tranchot / v. Müffling 1801–1828, Prussian Uraufnahme, etc.).</p>"
         )
 
     def closeEvent(self, event):

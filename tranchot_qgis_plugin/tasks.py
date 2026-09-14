@@ -184,7 +184,7 @@ class BuildingExtractionTask(QgsTask):
                             if p_shapely.is_valid and not p_shapely.is_empty:
                                 settlement_polys.append(p_shapely)
                 except Exception as e:
-                    QgsMessageLog.logMessage(f"Fehler bei ROI Polygon-Konvertierung: {e}", "Tranchot", Qgis.Warning)
+                    QgsMessageLog.logMessage(f"Error in ROI polygon conversion: {e}", "Tranchot", Qgis.Warning)
 
             # Run BuildingExtractor with dynamic module reload to ensure latest code is active
             try:
@@ -355,7 +355,7 @@ class LandUseExtractionTask(QgsTask):
         pipette_sampler: Optional[Any] = None,
         closing_kernel_px: int = 18,
     ):
-        super().__init__(f"HistMap: Landnutzung ({layer_name})", QgsTask.CanCancel)
+        super().__init__(f"HistMap: Land Use ({layer_name})", QgsTask.CanCancel)
         self.raster_path = raster_path
         self.config = config
         self.enabled_categories = enabled_categories or ["forest", "meadow", "water", "garden", "vineyard", "gravel"]
@@ -507,12 +507,12 @@ class LandUseExtractionTask(QgsTask):
                 return False
 
             category_label_map = {
-                "forest": "Wald",
-                "meadow": "Wiese & Weide",
-                "water": "Gewässer",
-                "garden": "Gärten & Nutzkulturen",
-                "vineyard": "Weinberge",
-                "gravel": "Kies- & Sandbänke",
+                "forest": "Forest",
+                "meadow": "Meadow & Pasture",
+                "water": "Water Bodies",
+                "garden": "Gardens & Cultivated Land",
+                "vineyard": "Vineyards & Slopes",
+                "gravel": "Gravel & Sandbars",
             }
 
             # Transform Shapely polygons to Map CRS
@@ -595,12 +595,12 @@ class LandUseExtractionTask(QgsTask):
 
             # Categorized Symbology styling with historical palette
             categories = [
-                ("forest", "Wald", "46,125,50,180", "27,94,32,255"),
-                ("meadow", "Wiese & Weide", "129,199,132,180", "56,142,60,255"),
-                ("water", "Gewässer", "30,136,229,210", "13,71,161,255"),
-                ("garden", "Gärten & Nutzkulturen", "165,214,167,180", "46,125,50,255"),
-                ("vineyard", "Weinberge", "212,163,115,180", "141,91,76,255"),
-                ("gravel", "Kies- & Sandbänke", "225,112,85,180", "180,80,50,255"),
+                ("forest", "Forest", "46,125,50,180", "27,94,32,255"),
+                ("meadow", "Meadow & Pasture", "129,199,132,180", "56,142,60,255"),
+                ("water", "Water Bodies", "30,136,229,210", "13,71,161,255"),
+                ("garden", "Gardens & Cultivated Land", "255,183,77,180", "230,81,0,255"),
+                ("vineyard", "Vineyards & Slopes", "186,104,200,180", "123,31,162,255"),
+                ("gravel", "Gravel & Sandbars", "225,112,85,180", "180,80,50,255"),
             ]
 
             cats = []

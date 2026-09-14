@@ -59,15 +59,42 @@ class TranchotPlugin:
             self.dockwidget = None
 
     def run(self):
-        """Toggles or displays the Tranchot dock widget panel."""
-        if self.dockwidget is None:
-            self.dockwidget = TranchotDockWidget(self.iface, self.iface.mainWindow())
-            self.dockwidget.closingPlugin.connect(self._on_dockwidget_closed)
-            self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dockwidget)
+        """Toggles or displays the Tranchot dock widget panel with hot-reloading."""
+        import sys
+        import importlib
+
+        # Dynamically reload all related modules so on-disk code and translation updates take effect immediately
+        for mod_name in list(sys.modules.keys()):
+            if mod_name.startswith("tranchot_qgis_plugin") or mod_name.startswith("tranchot_extractor"):
+                try:
+                    importlib.reload(sys.modules[mod_name])
+                except Exception:
+                    pass
+
+        # Re-import fresh TranchotDockWidget class
+        from .dockwidget import TranchotDockWidget
+
+        if self.dockwidget is not None:
+            try:
+                self.iface.removeDockWidget(self.dockwidget)
+                self.dockwidget.deleteLater()
+            except Exception:
+                pass
+            self.dockwidget = None
+
+        self.dockwidget = TranchotDockWidget(self.iface, self.iface.mainWindow())
+        self.dockwidget.closingPlugin.connect(self._on_dockwidget_closed)
+        self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dockwidget)
 
         self.dockwidget.show()
         self.dockwidget.raise_()
 
     def _on_dockwidget_closed(self):
         """Handle cleanup when user closes dockwidget."""
-        pass
+        if self.dockwidget is not None:
+            try:
+                self.iface.removeDockWidget(self.dockwidget)
+                self.dockwidget.deleteLater()
+            except Exception:
+                pass
+            self.dockwidget = None

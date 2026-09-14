@@ -184,13 +184,24 @@ class TranchotDockWidget(QDockWidget):
         header_layout = QVBoxLayout(header_box)
         header_layout.setContentsMargins(6, 4, 6, 4)
 
+        top_header_layout = QHBoxLayout()
         title_lbl = QLabel("🗺️ HistMap Extractor")
         title_font = QFont()
         title_font.setBold(True)
         title_font.setPointSize(11)
         title_lbl.setFont(title_font)
         title_lbl.setStyleSheet("color: #f5eedc;")
-        header_layout.addWidget(title_lbl)
+        top_header_layout.addWidget(title_lbl)
+        top_header_layout.addStretch(1)
+
+        btn_reload = QPushButton("🔄 Reload Plugin")
+        btn_reload.setToolTip("Click to immediately reload all Python modules, algorithm updates, and English interface.")
+        btn_reload.setStyleSheet(
+            "background-color: #37474f; color: #eceff1; font-weight: bold; font-size: 10px; padding: 3px 8px; border-radius: 3px;"
+        )
+        btn_reload.clicked.connect(self._hot_reload_plugin)
+        top_header_layout.addWidget(btn_reload)
+        header_layout.addLayout(top_header_layout)
 
         sub_lbl = QLabel("Historical Map Vectorization • BCDH Bonn")
         sub_lbl.setStyleSheet("color: #a0a0a0; font-size: 10px;")
@@ -2531,11 +2542,24 @@ class TranchotDockWidget(QDockWidget):
 
         target_cid = self.combo_lu_sample_class.currentData()
         if self.pipette_sampler is None:
+            import importlib
+            if "tranchot_extractor.extractors.pipette_sampler" in sys.modules:
+                try:
+                    importlib.reload(sys.modules["tranchot_extractor.extractors.pipette_sampler"])
+                except Exception:
+                    pass
+            from tranchot_extractor.extractors.pipette_sampler import PipetteSampler
             self.pipette_sampler = PipetteSampler()
 
-        entry = self.pipette_sampler.sample_from_polygon(
-            crop_rgb, target_cid, local_pts, name=f"Polygon #{len(self.pipette_sampler.get_stamps(target_cid)) + 1}"
-        )
+        poly_name = f"Polygon #{len(self.pipette_sampler.get_stamps(target_cid)) + 1}"
+        try:
+            entry = self.pipette_sampler.sample_from_polygon(
+                crop_rgb, target_cid, local_pts, name=poly_name
+            )
+        except TypeError:
+            entry = self.pipette_sampler.sample_from_polygon(
+                crop_rgb, target_cid, local_pts
+            )
 
         if entry:
             try:
@@ -2998,6 +3022,31 @@ class TranchotDockWidget(QDockWidget):
             "<p>Precise AI and computer vision vectorization for historical map sheets "
             "(Tranchot / v. Müffling 1801–1828, Prussian Uraufnahme, etc.).</p>"
         )
+
+    def _hot_reload_plugin(self):
+        """Hot-reloads all plugin and backend modules, replacing this dockwidget instance immediately."""
+        import sys
+        import importlib
+
+        for name in list(sys.modules.keys()):
+            if name.startswith("tranchot_qgis_plugin") or name.startswith("tranchot_extractor"):
+                try:
+                    importlib.reload(sys.modules[name])
+                except Exception:
+                    pass
+
+        try:
+            from tranchot_qgis_plugin.dockwidget import TranchotDockWidget
+            parent = self.parent() or self.iface.mainWindow()
+            area = self.iface.dockWidgetArea(self)
+            self.iface.removeDockWidget(self)
+            new_widget = TranchotDockWidget(self.iface, parent)
+            self.iface.addDockWidget(area, new_widget)
+            new_widget.show()
+            new_widget.raise_()
+            self.deleteLater()
+        except Exception as e:
+            self.status_lbl.setText(f"Reload note: {e}")
 
     def closeEvent(self, event):
         self.closingPlugin.emit()

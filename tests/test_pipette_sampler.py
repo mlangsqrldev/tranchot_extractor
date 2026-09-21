@@ -36,6 +36,9 @@ class TestPipetteSampler(unittest.TestCase):
         # Superimpose dark hachure line across the forest
         cv2.line(img, (50, 75), (100, 75), (50, 40, 30), 2)
 
+        # Clear default stamps to test single custom stamp addition
+        self.sampler.samples["forest"].stamps.clear()
+
         # Stamp at (75, 75) with radius 20
         stamp = self.sampler.sample_from_stamp(img, "forest", 75, 75, radius=20)
         self.assertIsNotNone(stamp)
@@ -50,6 +53,9 @@ class TestPipetteSampler(unittest.TestCase):
         cv2.rectangle(img, (20, 20), (70, 70), [90, 155, 95], -1)
         # Shade 2: Deep Olive Green
         cv2.rectangle(img, (120, 120), (170, 170), [60, 125, 65], -1)
+
+        # Clear default stamps to test 2 explicit stamps
+        self.sampler.samples["forest"].stamps.clear()
 
         # Stamp both shades
         s1 = self.sampler.sample_from_stamp(img, "forest", 45, 45, radius=15)
@@ -66,6 +72,7 @@ class TestPipetteSampler(unittest.TestCase):
     def test_save_and_load_palette(self):
         tmp_path = "tests_palette.json"
         try:
+            self.sampler.samples["forest"].stamps.clear()
             img = np.full((100, 100, 3), [70, 140, 75], dtype=np.uint8)
             self.sampler.sample_from_stamp(img, "forest", 50, 50, radius=20, name="Wald-Hell")
             self.sampler.save_palette(tmp_path)
@@ -149,6 +156,102 @@ class TestPipetteSampler(unittest.TestCase):
         p = meadow_polys[0]
         self.assertLess(p.bounds[1], 160, "Extracted polygon must be the true valley meadow")
 
+    def test_uncolored_slope_rejection_no_meadow_or_forest(self):
+        """Verifies that uncolored mountain relief slopes with hachures produce zero meadow or forest polygons."""
+        sampler = PipetteSampler()
+        # Create map patch: neutral parchment with dense black/brown hachures
+        img = np.full((300, 300, 3), [220, 210, 180], dtype=np.uint8)
+        for y in range(20, 280, 5):
+            cv2.line(img, (20, y), (280, y + 10), (70, 55, 40), 2)
+
+        res = sampler.extract_competitive_polygons(img, active_class_ids=["meadow", "forest"])
+        self.assertEqual(len(res.get("meadow", [])), 0, "Uncolored slope must NOT produce meadow polygons")
+        self.assertEqual(len(res.get("forest", [])), 0, "Uncolored slope must NOT produce forest polygons")
+
+    def test_olive_ochre_woodland_recognized(self):
+        """Verifies that authentic Eifel Hangwald (olive-ochre glaze with hachures) is recognized as forest."""
+        sampler = PipetteSampler()
+        # Parchment background (300x300)
+        img = np.full((300, 300, 3), [225, 215, 185], dtype=np.uint8)
+        
+        # Authentic Eifel woodland wash (RGB ~ [168, 160, 120])
+        cv2.rectangle(img, (50, 50), (250, 250), [168, 160, 120], -1)
+        # Tree and slope hachures over the woodland
+        for y in range(60, 240, 7):
+            cv2.line(img, (60, y), (240, y + 5), (60, 45, 30), 2)
+
+        # Explicitly sample the woodland nuance with pipette tool
+        sampler.sample_from_stamp(img, "forest", 150, 150, radius=20)
+
+        res = sampler.extract_competitive_polygons(img, active_class_ids=["forest", "meadow"])
+        forest_polys = res.get("forest", [])
+        meadow_polys = res.get("meadow", [])
+
+        self.assertGreaterEqual(len(forest_polys), 1, "Olive-ochre woodland must be extracted as forest")
+        self.assertEqual(len(meadow_polys), 0, "Olive-ochre woodland must NOT be classified as meadow")
+
+    def test_gravel_and_vineyard_exclusion_from_forest(self):
+        """Verifies that warm gravel sandbars and vineyards are strictly rejected when extracting forest."""
+        sampler = PipetteSampler()
+        img = np.full((300, 300, 3), [225, 215, 185], dtype=np.uint8)
+
+        # 1. Real forest block (Mühlberg green: R=185, G=196, B=126)
+        cv2.rectangle(img, (20, 20), (120, 120), [185, 196, 126], -1)
+
+        # 2. Gravel sandbar in river (Ahr gravel: R=184, G=179, B=142)
+        cv2.rectangle(img, (150, 20), (250, 120), [184, 179, 142], -1)
+
+        # 3. Vineyard on slope (Authentic Tranchot vineyard: carmine/reddish-brown wash with hachures)
+        cv2.rectangle(img, (50, 160), (250, 260), [180, 135, 120], -1)
+        for y in range(165, 255, 6):
+            cv2.line(img, (55, y), (245, y + 3), (90, 65, 45), 2)
+
+        # User samples forest on the real forest patch
+        sampler.sample_from_stamp(img, "forest", 70, 70, radius=20)
+
+        # Extract only forest
+        res = sampler.extract_competitive_polygons(img, active_class_ids=["forest"])
+        forest_polys = res.get("forest", [])
+
+        self.assertGreaterEqual(len(forest_polys), 1, "Real forest must be extracted")
+        for p in forest_polys:
+            cx, cy = p.centroid.x, p.centroid.y
+            # Must not be inside gravel sandbar
+            self.assertFalse(140 <= cx <= 260 and 10 <= cy <= 130, f"Gravel bank at ({cx}, {cy}) must NOT be forest")
+            # Must not be inside vineyard
+            self.assertFalse(40 <= cx <= 260 and 150 <= cy <= 270, f"Vineyard at ({cx}, {cy}) must NOT be forest")
+
+    def test_zero_overlap_guarantee(self):
+        """Verifies that under no circumstances can extracted polygons overlap each other."""
+        sampler = PipetteSampler()
+        img = np.full((300, 300, 3), [225, 215, 185], dtype=np.uint8)
+
+        # Adjoining forest and vineyard with mutual border
+        cv2.rectangle(img, (20, 20), (140, 150), [185, 196, 126], -1)  # Forest
+        cv2.rectangle(img, (140, 20), (260, 150), [180, 135, 120], -1) # Vineyard (shares border at x=140)
+        cv2.rectangle(img, (50, 150), (200, 260), [110, 150, 210], -1) # Water stream adjoining both
+
+        # Multi-class extraction
+        res = sampler.extract_competitive_polygons(img, active_class_ids=["forest", "vineyard", "water"])
+        all_polys = []
+        for cid, plist in res.items():
+            for p in plist:
+                all_polys.append((cid, p))
+
+        self.assertGreater(len(all_polys), 0)
+        # Check every pair of polygons for intersection
+        for i in range(len(all_polys)):
+            for j in range(i + 1, len(all_polys)):
+                c1, p1 = all_polys[i]
+                c2, p2 = all_polys[j]
+                inter_area = p1.intersection(p2).area
+                self.assertAlmostEqual(
+                    inter_area, 0.0, places=4,
+                    msg=f"Polygons of class {c1} and {c2} overlap by {inter_area:.4f} px2! Overlap must be 0.0."
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

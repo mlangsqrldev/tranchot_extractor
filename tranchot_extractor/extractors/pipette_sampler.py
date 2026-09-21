@@ -61,17 +61,128 @@ class PipetteSampler:
     """
 
     DEFAULT_CLASSES = [
-        {"class_id": "forest", "label": "Wald (Laub/Nadel)", "hex": "#27ae60", "rgb": [70, 140, 75], "min_area": 600.0, "tex_w": 1.2},
+        {"class_id": "forest", "label": "Wald & Busch / Hecken", "hex": "#27ae60", "rgb": [90, 142, 75], "min_area": 100.0, "tex_w": 0.3},
         {"class_id": "meadow", "label": "Wiese / Aue / Grünland", "hex": "#00cec9", "rgb": [120, 195, 175], "min_area": 200.0, "tex_w": 0.3},
-        {"class_id": "water", "label": "Gewässer / Rhein / Bäche", "hex": "#0984e3", "rgb": [85, 145, 195], "min_area": 10.0, "tex_w": 0.1},
-        {"class_id": "gravel", "label": "Kies- & Schotterbänke", "hex": "#e17055", "rgb": [215, 160, 120], "min_area": 200.0, "tex_w": 0.4},
+        {"class_id": "water", "label": "Gewässer / Rhein / Bäche", "hex": "#0984e3", "rgb": [95, 155, 200], "min_area": 15.0, "tex_w": 0.2},
+        {"class_id": "gravel", "label": "Kies- & Schotterbänke", "hex": "#e17055", "rgb": [215, 160, 120], "min_area": 80.0, "tex_w": 0.5},
         {"class_id": "vineyard", "label": "Weinberge (Rebhänge)", "hex": "#d63031", "rgb": [190, 130, 95], "min_area": 200.0, "tex_w": 0.9},
-        {"class_id": "garden", "label": "Gärten / Nutzkulturen", "hex": "#fdcb6e", "rgb": [195, 190, 115], "min_area": 200.0, "tex_w": 0.5},
+        {"class_id": "garden", "label": "Gärten / Nutzkulturen", "hex": "#a4b07e", "rgb": [165, 175, 140], "min_area": 100.0, "tex_w": 0.5},
     ]
 
     def __init__(self):
         self.samples: Dict[str, ColorSample] = {}
         self._init_defaults()
+
+    def _create_default_forest_stamps(self) -> List[StampEntry]:
+        """Creates the authentic historical Tranchot forest nuances: green wash, yellow-ochre woodland glaze, and Eifel hill forest."""
+        rgb_green = [90, 142, 75]
+        lab_green = list(cv2.cvtColor(np.uint8([[rgb_green]]), cv2.COLOR_RGB2LAB)[0, 0])
+        s_green = StampEntry(
+            stamp_id=1, cx=0.0, cy=0.0, radius=8,
+            rgb=rgb_green, hsv=[0, 0, 0], lab=[int(x) for x in lab_green],
+            hex_color="#5a8e4b", lab_std=[14.0, 4.5, 5.5],
+            tex_energy_mean=50.0, tex_energy_std=15.0,
+            dir_coherence_mean=0.5, dir_coherence_std=0.15,
+            name="Wald (Grünlasur / Laub- & Nadelwald)",
+            raw_pixels=100, distilled_pixels=100
+        )
+        rgb_yellow = [182, 198, 118]
+        lab_yellow = list(cv2.cvtColor(np.uint8([[rgb_yellow]]), cv2.COLOR_RGB2LAB)[0, 0])
+        s_yellow = StampEntry(
+            stamp_id=2, cx=0.0, cy=0.0, radius=8,
+            rgb=rgb_yellow, hsv=[0, 0, 0], lab=[int(x) for x in lab_yellow],
+            hex_color="#b6c676", lab_std=[14.0, 4.5, 6.0],
+            tex_energy_mean=50.0, tex_energy_std=15.0,
+            dir_coherence_mean=0.5, dir_coherence_std=0.15,
+            name="Hangwald & Buschwerk (Gelbgrün)",
+            raw_pixels=100, distilled_pixels=100
+        )
+        rgb_woodland = [224, 208, 138]
+        lab_woodland = list(cv2.cvtColor(np.uint8([[rgb_woodland]]), cv2.COLOR_RGB2LAB)[0, 0])
+        s_woodland = StampEntry(
+            stamp_id=3, cx=0.0, cy=0.0, radius=8,
+            rgb=rgb_woodland, hsv=[0, 0, 0], lab=[int(x) for x in lab_woodland],
+            hex_color="#e0d08a", lab_std=[16.0, 5.0, 7.0],
+            tex_energy_mean=50.0, tex_energy_std=15.0,
+            dir_coherence_mean=0.5, dir_coherence_std=0.15,
+            name="Bergkuppen-Waldlasur (Mühlberg / Busch & Hecken)",
+            raw_pixels=100, distilled_pixels=100
+        )
+        return [s_green, s_yellow, s_woodland]
+
+    def _create_default_gravel_stamps(self) -> List[StampEntry]:
+        """Creates authentic historical Tranchot gravel bank nuances: warm sandbar, grey-beige river gravel, and shore silt."""
+        rgb_sand = [215, 175, 140]
+        lab_sand = list(cv2.cvtColor(np.uint8([[rgb_sand]]), cv2.COLOR_RGB2LAB)[0, 0])
+        s1 = StampEntry(
+            stamp_id=1, cx=0.0, cy=0.0, radius=8,
+            rgb=rgb_sand, hsv=[0, 0, 0], lab=[int(x) for x in lab_sand],
+            hex_color="#d7af8c", lab_std=[14.0, 5.0, 6.0],
+            tex_energy_mean=32.0, tex_energy_std=12.0,
+            dir_coherence_mean=0.4, dir_coherence_std=0.2,
+            name="Kiesbank (Lachs-Sand / Schotter)",
+            raw_pixels=100, distilled_pixels=100
+        )
+        rgb_grey = [190, 182, 152]
+        lab_grey = list(cv2.cvtColor(np.uint8([[rgb_grey]]), cv2.COLOR_RGB2LAB)[0, 0])
+        s2 = StampEntry(
+            stamp_id=2, cx=0.0, cy=0.0, radius=8,
+            rgb=rgb_grey, hsv=[0, 0, 0], lab=[int(x) for x in lab_grey],
+            hex_color="#beb698", lab_std=[14.0, 5.0, 6.0],
+            tex_energy_mean=35.0, tex_energy_std=12.0,
+            dir_coherence_mean=0.4, dir_coherence_std=0.2,
+            name="Flussbett-Schotter (Grau-Beige)",
+            raw_pixels=100, distilled_pixels=100
+        )
+        rgb_silt = [208, 196, 165]
+        lab_silt = list(cv2.cvtColor(np.uint8([[rgb_silt]]), cv2.COLOR_RGB2LAB)[0, 0])
+        s3 = StampEntry(
+            stamp_id=3, cx=0.0, cy=0.0, radius=8,
+            rgb=rgb_silt, hsv=[0, 0, 0], lab=[int(x) for x in lab_silt],
+            hex_color="#d0c4a5", lab_std=[14.0, 5.0, 6.0],
+            tex_energy_mean=30.0, tex_energy_std=10.0,
+            dir_coherence_mean=0.4, dir_coherence_std=0.2,
+            name="Ufersand & Schlick",
+            raw_pixels=100, distilled_pixels=100
+        )
+        return [s1, s2, s3]
+
+    def _create_default_water_stamps(self) -> List[StampEntry]:
+        """Creates authentic historical Tranchot water nuances: Prussian blue river wash, deep channel flow, and shallow brooks."""
+        rgb_river = [95, 155, 200]
+        lab_river = list(cv2.cvtColor(np.uint8([[rgb_river]]), cv2.COLOR_RGB2LAB)[0, 0])
+        s1 = StampEntry(
+            stamp_id=1, cx=0.0, cy=0.0, radius=8,
+            rgb=rgb_river, hsv=[0, 0, 0], lab=[int(x) for x in lab_river],
+            hex_color="#5f9bc8", lab_std=[14.0, 4.5, 6.0],
+            tex_energy_mean=14.0, tex_energy_std=6.0,
+            dir_coherence_mean=0.3, dir_coherence_std=0.15,
+            name="Flusslauf & Hauptstrom (Cyan-/Preußischblau)",
+            raw_pixels=100, distilled_pixels=100
+        )
+        rgb_deep = [65, 120, 170]
+        lab_deep = list(cv2.cvtColor(np.uint8([[rgb_deep]]), cv2.COLOR_RGB2LAB)[0, 0])
+        s2 = StampEntry(
+            stamp_id=2, cx=0.0, cy=0.0, radius=8,
+            rgb=rgb_deep, hsv=[0, 0, 0], lab=[int(x) for x in lab_deep],
+            hex_color="#4178aa", lab_std=[14.0, 4.5, 5.5],
+            tex_energy_mean=16.0, tex_energy_std=6.0,
+            dir_coherence_mean=0.3, dir_coherence_std=0.15,
+            name="Tiefe Strömungsrinne (Dunkelblau)",
+            raw_pixels=100, distilled_pixels=100
+        )
+        rgb_brook = [135, 180, 210]
+        lab_brook = list(cv2.cvtColor(np.uint8([[rgb_brook]]), cv2.COLOR_RGB2LAB)[0, 0])
+        s3 = StampEntry(
+            stamp_id=3, cx=0.0, cy=0.0, radius=8,
+            rgb=rgb_brook, hsv=[0, 0, 0], lab=[int(x) for x in lab_brook],
+            hex_color="#87b4d2", lab_std=[14.0, 4.5, 5.5],
+            tex_energy_mean=14.0, tex_energy_std=6.0,
+            dir_coherence_mean=0.3, dir_coherence_std=0.15,
+            name="Uferzone & Seitenbach (Hellblau / Mühlengraben)",
+            raw_pixels=100, distilled_pixels=100
+        )
+        return [s1, s2, s3]
 
     def _init_defaults(self):
         self.samples.clear()
@@ -79,6 +190,14 @@ class PipetteSampler:
             rgb = np.uint8([[c["rgb"]]])
             hsv = list(cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)[0, 0])
             lab = list(cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)[0, 0])
+            if c["class_id"] == "forest":
+                stamps = self._create_default_forest_stamps()
+            elif c["class_id"] == "gravel":
+                stamps = self._create_default_gravel_stamps()
+            elif c["class_id"] == "water":
+                stamps = self._create_default_water_stamps()
+            else:
+                stamps = []
             self.samples[c["class_id"]] = ColorSample(
                 class_id=c["class_id"],
                 label=c["label"],
@@ -92,7 +211,8 @@ class PipetteSampler:
                 sampled_points=[c["rgb"]],
                 texture_weight=c["tex_w"],
                 lab_std=[8.0, 4.0, 4.0],
-                has_pattern_profile=False,
+                has_pattern_profile=(len(stamps) > 0),
+                stamps=stamps,
             )
 
     def get_sample(self, class_id: str) -> Optional[ColorSample]:
@@ -108,6 +228,14 @@ class PipetteSampler:
                 rgb = np.uint8([[c["rgb"]]])
                 hsv = list(cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)[0, 0])
                 lab = list(cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)[0, 0])
+                if class_id == "forest":
+                    stamps = self._create_default_forest_stamps()
+                elif class_id == "gravel":
+                    stamps = self._create_default_gravel_stamps()
+                elif class_id == "water":
+                    stamps = self._create_default_water_stamps()
+                else:
+                    stamps = []
                 self.samples[class_id] = ColorSample(
                     class_id=class_id,
                     label=c["label"],
@@ -121,7 +249,8 @@ class PipetteSampler:
                     sampled_points=[c["rgb"]],
                     texture_weight=c["tex_w"],
                     lab_std=[8.0, 4.0, 4.0],
-                    has_pattern_profile=False,
+                    has_pattern_profile=(len(stamps) > 0),
+                    stamps=stamps,
                 )
                 break
 
@@ -220,26 +349,31 @@ class PipetteSampler:
         b_crop = crop_rgb[:, :, 2].astype(int)
 
         is_hachure_ink = (gray_crop < 95.0) | ((l_chan < 105.0) & (sat < 30.0))
-        is_paper = (l_chan > 225.0) & (sat < 6.0) & (chroma < 6.0)
+        is_paper = (l_chan > 175.0) & (a_chan >= 125.5) & (a_chan <= 130.5) & (sat < 20.0) & (chroma < 14.0)
 
         # 3. Class-specific pigment preference (broad & generous so slope/border nuances succeed)
         cid = class_id.lower()
         if "forest" in cid or "wald" in cid:
             is_pigment = (
-                (a_chan <= 129.5) &
-                (b_chan >= 126.0) &
+                (
+                    # Classic foliage green wash
+                    ((a_chan <= 124.5) & (g_crop >= b_crop + 6) & (g_crop >= r_crop - 4)) |
+                    # Authentic historical yellow-green woodland glaze (Mühlberg, hilltops, Busch/Hecken)
+                    ((b_chan >= 145.0) & (g_crop >= b_crop + 15) & (a_chan <= 128.0) & (r_crop <= g_crop + 35))
+                ) &
                 (l_chan >= 50.0) &
                 (l_chan <= 235.0) &
-                (g_crop >= b_crop + 2) &
                 (~is_paper) & (~is_hachure_ink)
             )
         elif "meadow" in cid or "wiese" in cid or "weide" in cid:
             is_pigment = (
-                (a_chan <= 126.0) &
-                (b_chan < 144.0) &
+                (a_chan <= 124.5) &
+                (b_chan <= 136.0) &
                 (l_chan >= 80.0) &
                 (l_chan <= 245.0) &
+                (g_crop >= r_crop - 2) &
                 (g_crop >= b_crop - 4) &
+                (sat >= 7.0) &
                 (~is_paper) & (~is_hachure_ink)
             )
         elif "water" in cid or "gewässer" in cid or "wasser" in cid or "see" in cid or "bach" in cid:
@@ -251,11 +385,11 @@ class PipetteSampler:
                 (~is_paper) & (~is_hachure_ink)
             )
         elif "vineyard" in cid or "wein" in cid:
-            is_pigment = (a_chan >= 127.0) & (r_crop >= b_crop) & (~is_paper)
+            is_pigment = (a_chan >= 130.0) & (r_crop >= g_crop + 2) & (r_crop >= b_crop + 6) & (~is_paper)
         elif "gravel" in cid or "kies" in cid:
-            is_pigment = (a_chan >= 126.5) & (r_crop >= b_crop - 2) & (~is_paper)
+            is_pigment = (a_chan >= 129.0) & (b_chan <= 146.0) & (r_crop >= b_crop + 4) & (r_crop >= g_crop - 2) & (~is_paper)
         elif "garden" in cid or "garten" in cid or "gärten" in cid:
-            is_pigment = (a_chan <= 128.5) & (b_chan >= 127.0) & (g_crop >= b_crop) & (~is_paper)
+            is_pigment = (a_chan <= 127.5) & (b_chan >= 127.0) & (b_chan <= 145.0) & (g_crop >= b_crop) & (~is_paper)
         elif "building" in cid or "gebäude" in cid:
             is_pigment = (a_chan > 130.0) & (r_crop > g_crop + 8)
         else:
@@ -378,6 +512,15 @@ class PipetteSampler:
         if class_id in self.samples:
             self.samples[class_id].stamps.clear()
             self.samples[class_id].has_pattern_profile = False
+            if class_id == "forest":
+                self.samples[class_id].stamps = self._create_default_forest_stamps()
+                self.samples[class_id].has_pattern_profile = True
+            elif class_id == "gravel":
+                self.samples[class_id].stamps = self._create_default_gravel_stamps()
+                self.samples[class_id].has_pattern_profile = True
+            elif class_id == "water":
+                self.samples[class_id].stamps = self._create_default_water_stamps()
+                self.samples[class_id].has_pattern_profile = True
 
     def get_stamps(self, class_id: str) -> List[StampEntry]:
         if class_id in self.samples:
@@ -437,15 +580,61 @@ class PipetteSampler:
         b_chan = lab_crop[:, :, 2]
         chroma = np.sqrt((a_chan - 128.0)**2 + (b_chan - 128.0)**2)
 
-        # Deconvolve black ink strokes & white margins
-        is_ink = (gray_crop < 95.0) | ((l_chan < 105.0) & (sat < 30.0))
-        is_white_paper = (l_chan > 225.0) & (sat < 6.0) & (chroma < 6.0)
+        # Deconvolve black ink strokes & aged paper margins
+        r_crop = crop_rgb[:, :, 0].astype(int)
+        g_crop = crop_rgb[:, :, 1].astype(int)
+        b_crop = crop_rgb[:, :, 2].astype(int)
 
-        valid_mask = crop_mask & (~is_ink) & (~is_white_paper)
-        if np.count_nonzero(valid_mask) < 6:
-            valid_mask = crop_mask & (~is_ink)
-            if np.count_nonzero(valid_mask) < 6:
-                valid_mask = crop_mask
+        is_paper = (l_chan > 195.0) & (a_chan >= 126.0) & (g_crop <= r_crop + 2) & (sat < 35.0)
+        is_ink = (gray_crop < 95.0) | ((l_chan < 110.0) & (sat < 30.0))
+
+        # Class-specific pigment wash filter: extracts authentic watercolor pigment even if
+        # user drew a loose polygon covering surrounding slopes or bare paper fields.
+        cid = class_id.lower()
+        if "forest" in cid or "wald" in cid:
+            is_pigment = (
+                (a_chan <= 127.0) &
+                (b_chan >= 126.0) &
+                (l_chan <= 230.0) &
+                (g_crop >= b_crop + 8) &
+                (r_crop <= g_crop + 28) &
+                (~is_paper) & (~is_ink)
+            )
+        elif "meadow" in cid or "wiese" in cid or "weide" in cid:
+            is_pigment = (
+                (a_chan <= 125.0) &
+                (b_chan < 142.0) &
+                (l_chan >= 80.0) &
+                (l_chan <= 242.0) &
+                (g_crop >= r_crop + 1) &
+                (g_crop >= b_crop - 6) &
+                (~is_paper) & (~is_ink)
+            )
+        elif "water" in cid or "gewässer" in cid or "wasser" in cid:
+            is_pigment = (
+                (b_chan <= 129.0) &
+                (l_chan >= 80.0) &
+                (b_crop >= r_crop - 6) &
+                (~is_paper) & (~is_ink)
+            )
+        elif "garden" in cid or "garten" in cid:
+            is_pigment = (a_chan <= 127.0) & (b_chan >= 127.0) & (g_crop >= b_crop + 2) & (~is_paper) & (~is_ink)
+        elif "vineyard" in cid or "wein" in cid:
+            is_pigment = (a_chan >= 128.0) & (r_crop >= b_crop + 2) & (~is_paper) & (~is_ink)
+        else:
+            is_pigment = (~is_paper) & (~is_ink)
+
+        target_mask = crop_mask & is_pigment & (~is_ink)
+        if np.count_nonzero(target_mask) >= 10:
+            valid_mask = target_mask
+        else:
+            non_paper = crop_mask & (~is_paper) & (~is_ink)
+            if np.count_nonzero(non_paper) >= 10:
+                valid_mask = non_paper
+            else:
+                valid_mask = crop_mask & (~is_ink)
+                if np.count_nonzero(valid_mask) < 6:
+                    valid_mask = crop_mask
 
         distilled_pixels = crop_rgb[valid_mask]
         distilled_lab = lab_crop[valid_mask]
@@ -458,9 +647,9 @@ class PipetteSampler:
 
         raw_std = np.std(distilled_lab, axis=0)
         std_lab = [
-            float(max(10.0, min(24.0, raw_std[0]))),
-            float(max(3.5, min(7.5, raw_std[1]))),
-            float(max(3.5, min(8.0, raw_std[2]))),
+            float(max(6.0, min(14.0, raw_std[0]))),
+            float(max(3.0, min(5.5, raw_std[1]))),
+            float(max(3.0, min(6.0, raw_std[2]))),
         ]
 
         # Texture and Directional Coherence
@@ -562,29 +751,32 @@ class PipetteSampler:
         g_img = image_rgb[:, :, 1].astype(int)
         b_img = image_rgb[:, :, 2].astype(int)
 
-        is_paper = (l_chan > 190.0) & (a_chan >= 126.0) & (g_img <= r_img + 2) & (sat < 35.0)
+        is_paper = (l_chan > 175.0) & (a_chan >= 125.5) & (a_chan <= 130.5) & (g_img <= r_img + 2) & (sat < 22.0)
         is_ink = (l_chan < 155.0) & (g_img <= r_img + 2)
 
         # 3. Class-specific pigment wash filter to purge surrounding parchment & slope lines
         cid = class_id.lower()
         if "forest" in cid or "wald" in cid:
             is_pigment = (
-                (a_chan <= 127.8) &
-                (b_chan >= 127.5) &
-                (l_chan < 225.0) &
-                (g_img >= r_img * 0.85) &
-                (g_img >= b_img + 4) &
+                (
+                    # Classic foliage green wash
+                    ((a_chan <= 124.5) & (g_img >= b_img + 6) & (g_img >= r_img - 4)) |
+                    # Authentic historical yellow-green woodland glaze (Mühlberg, hilltops, Busch/Hecken)
+                    ((b_chan >= 145.0) & (g_img >= b_img + 15) & (a_chan <= 128.0) & (r_img <= g_img + 35))
+                ) &
+                (l_chan >= 50.0) &
+                (l_chan <= 235.0) &
                 (~is_paper) & (~is_ink)
             )
         elif "meadow" in cid or "wiese" in cid or "weide" in cid:
             is_pigment = (
-                (a_chan <= 123.8) &
-                (b_chan < 140.0) &
+                (a_chan <= 124.5) &
+                (b_chan <= 136.0) &
                 (l_chan >= 90.0) &
                 (l_chan <= 242.0) &
-                (sat >= 6.0) &
-                (g_img >= r_img + 2) &
-                (g_img >= b_img - 6) &
+                (sat >= 7.0) &
+                (g_img >= r_img - 2) &
+                (g_img >= b_img - 4) &
                 (~is_paper) & (~is_ink)
             )
         elif "water" in cid or "gewässer" in cid or "wasser" in cid:
@@ -595,11 +787,11 @@ class PipetteSampler:
                 (~is_paper) & (~is_ink)
             )
         elif "vineyard" in cid or "wein" in cid:
-            is_pigment = (a_chan >= 128.5) & (r_img >= b_img + 2) & (sat >= 10.0) & (~is_paper)
+            is_pigment = (a_chan >= 130.0) & (r_img >= g_img + 2) & (r_img >= b_img + 6) & (~is_paper)
         elif "gravel" in cid or "kies" in cid:
-            is_pigment = (a_chan >= 127.0) & (r_img >= b_img) & (sat >= 8.0) & (~is_paper)
+            is_pigment = (a_chan >= 129.0) & (b_chan <= 146.0) & (r_img >= b_img + 4) & (r_img >= g_img - 2) & (~is_paper)
         elif "garden" in cid or "garten" in cid or "gärten" in cid:
-            is_pigment = (a_chan <= 127.5) & (b_chan >= 128.0) & (g_img >= b_img + 2) & (~is_paper)
+            is_pigment = (a_chan <= 127.5) & (b_chan >= 127.0) & (b_chan <= 145.0) & (g_img >= b_img) & (~is_paper)
         elif "building" in cid or "gebäude" in cid:
             is_pigment = (a_chan > 132.0) & (r_img > g_img + 15)
         else:
@@ -748,7 +940,12 @@ class PipetteSampler:
         lab_raw = cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32)
         sat_raw = hsv_raw[:, :, 1]
         chroma_raw = np.sqrt((lab_raw[:, :, 1] - 128.0)**2 + (lab_raw[:, :, 2] - 128.0)**2)
-        is_ink_stroke = ((dark_diff > 16.0) | (gray < 110.0)) & ((sat_raw < 40.0) | (chroma_raw < 15.0))
+        r_raw = small[:, :, 0].astype(int)
+        g_raw = small[:, :, 1].astype(int)
+        b_raw = small[:, :, 2].astype(int)
+        is_black_ink = ((dark_diff > 14.0) | (gray < 110.0)) & ((sat_raw < 45.0) | (chroma_raw < 18.0))
+        is_sepia_ink = (dark_diff > 10.0) & (gray < 155.0) & (sat_raw < 95.0) & (r_raw >= b_raw + 8) & (g_raw <= r_raw + 5)
+        is_ink_stroke = is_black_ink | is_sepia_ink
 
         k_hatch = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         r_infill = cv2.dilate(small[:, :, 0], k_hatch)
@@ -759,6 +956,7 @@ class PipetteSampler:
         pigment_rgb[is_ink_stroke, 0] = r_infill[is_ink_stroke]
         pigment_rgb[is_ink_stroke, 1] = g_infill[is_ink_stroke]
         pigment_rgb[is_ink_stroke, 2] = b_infill[is_ink_stroke]
+        hatch_density = cv2.boxFilter(is_ink_stroke.astype(np.float32), -1, (15, 15))
 
         lab = cv2.cvtColor(pigment_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
         hsv = cv2.cvtColor(pigment_rgb, cv2.COLOR_RGB2HSV).astype(np.float32)
@@ -772,17 +970,59 @@ class PipetteSampler:
         b_p = pigment_rgb[:, :, 2].astype(int)
 
         # 3. Paper & Mountain Relief Baselines
-        # Neutral parchment (roads, bare fields, uncolored margins)
-        paper_chroma = np.sqrt((a_chan - 128.0)**2 + (b_chan - 134.0)**2)
-        d_paper = (paper_chroma / 2.8) + (np.abs(l_chan - 215.0) / 28.0)
-
-        # Baseline: Mountain Relief / Slope Hachures (Schraffen auf Bergen/Hängen OHNE Grünlasur)
-        # Directional ink hachures + warm bistre terrain shading (a* ~ 129.8, b* ~ 141.0, L ~ 165)
-        d_relief_slope = np.sqrt(
-            ((l_chan - 165.0) / 18.0) ** 2 +
-            ((a_chan - 129.8) / 3.5) ** 2 +
-            ((b_chan - 141.0) / 4.5) ** 2
+        # Real forest wash detection (classic green wash OR yellow-green woodland glaze on hilltops)
+        has_classic_green = (a_chan <= 124.5) & (g_p >= b_p + 10) & (g_p >= r_p - 4) & (b_chan >= 132.0)
+        has_yellow_woodland = (
+            (b_chan >= 148.0) & 
+            (g_p >= b_p + 22) & 
+            (a_chan <= 139.0) & 
+            (r_p <= g_p + 50) & 
+            (l_chan >= 100.0)
         )
+        has_forest_wash = has_classic_green | has_yellow_woodland
+
+        # Real meadow wash detection (cool turquoise/green valley wash)
+        has_meadow_wash = (
+            (a_chan <= 124.2) &
+            (b_chan <= 141.0) &
+            (g_p >= r_p) &
+            (g_p >= b_p - 4) &
+            (sat >= 7.0)
+        )
+
+        # Baseline: Mountain Relief / Slope Hachures (Schraffen auf Bergen/Hängen OHNE Farblasur)
+        paper_background = (
+            (l_chan >= 170.0) &
+            (b_chan <= 144.5) &
+            (a_chan >= 125.0) &
+            (a_chan <= 130.5) &
+            (sat < 52.0)
+        )
+
+        is_uncolored_slope = (
+            ((hatch_density > 0.05) | ((tex_energy > 14.0) & (dir_coh > 0.20))) &
+            paper_background &
+            (~has_forest_wash) &
+            (~has_meadow_wash)
+        )
+        d_relief_slope = np.where(is_uncolored_slope, 0.05, 5.0)
+
+        # Baseline: Neutral parchment (roads, bare fields, uncolored margins)
+        is_pure_paper = (
+            paper_background &
+            (~has_forest_wash) &
+            (~has_meadow_wash) &
+            (hatch_density <= 0.08) &
+            (tex_energy <= 18.0)
+        )
+        paper_chroma = np.sqrt((a_chan - 128.0)**2 + (np.maximum(0.0, b_chan - 142.0))**2)
+        p_l_dist = (np.maximum(0.0, 172.0 - l_chan) / 16.0) + (np.maximum(0.0, l_chan - 232.0) / 20.0)
+        d_paper = (paper_chroma / 2.5) + p_l_dist
+        has_gravel_active = any(("gravel" in s.class_id.lower() or "kies" in s.class_id.lower()) for s in active_classes)
+        if not has_gravel_active:
+            d_paper = np.where(is_pure_paper, 0.05, d_paper)
+        else:
+            d_paper = np.where(is_pure_paper, np.maximum(0.18, d_paper), d_paper)
 
         # 4. Compute Distance Volume for Active Classes
         dist_maps = [d_paper, d_relief_slope]  # Index 0: Paper, Index 1: Mountain Relief
@@ -793,7 +1033,8 @@ class PipetteSampler:
             if "water" in cid or "gewässer" in cid or "wasser" in cid:
                 water_grid_idx = idx
 
-            is_watercolor_class = ("meadow" in cid or "wiese" in cid or "weide" in cid or "water" in cid or "gewässer" in cid or "wasser" in cid)
+            is_watercolor_class = ("forest" in cid or "wald" in cid or "meadow" in cid or "wiese" in cid or "weide" in cid or "water" in cid or "gewässer" in cid or "wasser" in cid)
+            tol_scale = float(getattr(sample, "tolerance", 24)) / 24.0
 
             if getattr(sample, "stamps", None) and len(sample.stamps) > 0:
                 stamp_dists = []
@@ -801,9 +1042,9 @@ class PipetteSampler:
                     mu_l, mu_a, mu_b = s.lab
                     sig_l, sig_a, sig_b = s.lab_std
                     d_col = np.sqrt(
-                        ((l_chan - mu_l) / sig_l) ** 2 +
-                        ((a_chan - mu_a) / sig_a) ** 2 +
-                        ((b_chan - mu_b) / sig_b) ** 2
+                        ((l_chan - mu_l) / (sig_l * tol_scale)) ** 2 +
+                        ((a_chan - mu_a) / (sig_a * tol_scale)) ** 2 +
+                        ((b_chan - mu_b) / (sig_b * tol_scale)) ** 2
                     )
                     if is_watercolor_class:
                         total_dist_stamp = d_col
@@ -820,9 +1061,9 @@ class PipetteSampler:
                 sig_l, sig_a, sig_b = sample.lab_std if hasattr(sample, 'lab_std') and sample.lab_std else [14.0, 4.0, 5.0]
 
                 d_col = np.sqrt(
-                    ((l_chan - mu_l) / sig_l) ** 2 +
-                    ((a_chan - mu_a) / sig_a) ** 2 +
-                    ((b_chan - mu_b) / sig_b) ** 2
+                    ((l_chan - mu_l) / (sig_l * tol_scale)) ** 2 +
+                    ((a_chan - mu_a) / (sig_a * tol_scale)) ** 2 +
+                    ((b_chan - mu_b) / (sig_b * tol_scale)) ** 2
                 )
                 if is_watercolor_class:
                     total_dist = d_col
@@ -843,23 +1084,21 @@ class PipetteSampler:
         min_dists = np.min(dist_stack, axis=2)
 
         # 5. Broad Spectral Plausibility Gates (prevents false bleed across categories)
-        gate_forest = (
-            (a_chan <= 129.2) &
-            (b_chan >= 126.0) &
-            (l_chan <= 235.0) &
-            (g_p >= b_p + 3) &
-            (r_p <= g_p + 30)
+        gate_forest = has_forest_wash & (~is_pure_paper) & (~is_uncolored_slope)
+        gate_meadow = has_meadow_wash & (~is_pure_paper) & (~is_uncolored_slope)
+        gate_water = (b_chan <= 129.5) & (b_p >= r_p - 8) & (~has_forest_wash) & (~is_pure_paper) & (~is_uncolored_slope)
+        gate_vineyard = (
+            (a_chan >= 130.0) & 
+            (r_p >= g_p) & 
+            (r_p >= b_p + 4) & 
+            (~( (a_chan <= 127.5) & (b_chan >= 148.0) & (g_p >= b_p + 30) )) &
+            (~is_pure_paper)
         )
-        gate_meadow = (
-            (a_chan <= 126.0) &
-            (b_chan < 144.0) &
-            (g_p >= r_p - 4) &
-            (g_p >= b_p - 4) &
-            (l_chan >= 80.0) &
-            (l_chan <= 245.0)
+        gate_gravel = (
+            (r_p >= b_p - 4) &
+            (g_p >= b_p - 10) &
+            (~has_forest_wash)
         )
-        gate_water = (b_chan <= 129.0) & (b_p >= r_p - 6)
-        gate_warm = (a_chan >= 127.0) & (r_p >= b_p - 2)
 
         # Collar filter (ignore scanned map collar and outer border lines)
         sh, sw = small.shape[:2]
@@ -875,27 +1114,35 @@ class PipetteSampler:
         for idx, sample in enumerate(active_classes, 2):
             cid = sample.class_id.lower()
             tol_scale = float(getattr(sample, "tolerance", 24)) / 24.0
+            max_allowed_dist = 3.6 * (tol_scale ** 0.6)
             if "forest" in cid or "wald" in cid:
                 gate = gate_forest
-                max_allowed_dist = 4.2 * tol_scale
-            elif "meadow" in cid or "wiese" in cid or "weide" in cid or "garden" in cid or "garten" in cid:
+                c_mask = ((winner_idx == idx) & (min_dists <= max_allowed_dist) & gate & valid_collar & (~is_pure_paper) & (~is_uncolored_slope))
+            elif "meadow" in cid or "wiese" in cid or "weide" in cid:
                 gate = gate_meadow
-                max_allowed_dist = 3.8 * tol_scale
+                c_mask = ((winner_idx == idx) & (min_dists <= max_allowed_dist) & gate & valid_collar & (~is_pure_paper) & (~is_uncolored_slope))
+            elif "garden" in cid or "garten" in cid:
+                gate = (a_chan <= 127.0) & (b_chan <= 145.0) & (g_p >= b_p + 5) & (~is_pure_paper) & (~is_uncolored_slope)
+                c_mask = ((winner_idx == idx) & (min_dists <= max_allowed_dist) & gate & valid_collar & (~is_pure_paper) & (~is_uncolored_slope))
             elif "water" in cid or "gewässer" in cid or "wasser" in cid:
                 gate = gate_water
-                max_allowed_dist = 4.2 * tol_scale
-            elif "vineyard" in cid or "wein" in cid or "gravel" in cid or "kies" in cid:
-                gate = gate_warm
-                max_allowed_dist = 4.2 * tol_scale
+                c_mask = ((winner_idx == idx) & (min_dists <= max_allowed_dist) & gate & valid_collar & (~is_pure_paper) & (~is_uncolored_slope))
+            elif "vineyard" in cid or "wein" in cid:
+                gate = gate_vineyard
+                c_mask = ((winner_idx == idx) & (min_dists <= max_allowed_dist) & gate & valid_collar & (~is_pure_paper) & (~is_uncolored_slope))
+            elif "gravel" in cid or "kies" in cid:
+                gate = gate_gravel
+                c_mask = ((winner_idx == idx) & (min_dists <= max_allowed_dist) & gate & valid_collar)
             else:
-                gate = True
-                max_allowed_dist = 4.2 * tol_scale
-
-            c_mask = ((winner_idx == idx) & (min_dists <= max_allowed_dist) & gate & valid_collar)
+                gate = (~is_pure_paper)
+                c_mask = ((winner_idx == idx) & (min_dists <= max_allowed_dist) & gate & valid_collar)
 
             if "meadow" in cid or "wiese" in cid or "weide" in cid:
                 density = cv2.boxFilter(c_mask.astype(np.float32), -1, (15, 15))
-                c_mask = (density >= 0.25) & gate & valid_collar
+                c_mask = (density >= 0.25) & gate & valid_collar & (~is_pure_paper) & (~is_uncolored_slope)
+            elif "forest" in cid or "wald" in cid:
+                density = cv2.boxFilter(c_mask.astype(np.float32), -1, (15, 15))
+                c_mask = (density >= 0.20) & gate & valid_collar & (~is_pure_paper) & (~is_uncolored_slope)
 
             winner_grid[c_mask] = idx
 
@@ -918,28 +1165,43 @@ class PipetteSampler:
             cid = sample.class_id
             user_min_area = float(getattr(sample, "min_area_px", 0.0))
             if cid == "water":
-                # Specialized water ribbon & lake pipeline
-                k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+                # Specialized water ribbon & lake pipeline with dynamic gap closing (bridges, dams, text)
+                k_size = max(3, int(round(closing_kernel_px * scale_factor)))
+                k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
                 k_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
                 mask_closed = cv2.morphologyEx(c_mask, cv2.MORPH_CLOSE, k_close)
                 mask_clean = cv2.dilate(mask_closed, k_dilate, iterations=1)
-                min_area = max(10.0, user_min_area * 0.1) if user_min_area > 0 else 20.0
+                mask_clean[is_pure_paper] = 0
+                mask_clean[is_uncolored_slope] = 0
+                min_area = max(5.0, user_min_area) if user_min_area > 0 else 15.0
                 approx_eps = 0.5
-                min_hole_area = 5000.0 * (scale_factor ** 2)
+                min_hole_area = max(50.0, 300.0 * (scale_factor ** 2))
             elif cid == "forest":
-                # Dynamic forest canopy closing: bridges foliage crowns and closes gaps live
-                k_size = max(5, int(round(closing_kernel_px * scale_factor)))
+                # Dynamic forest canopy closing: bridges foliage crowns without fusing distant hills
+                k_size = max(5, int(round(min(14, closing_kernel_px) * scale_factor)))
                 k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
                 mask_clean = cv2.morphologyEx(c_mask, cv2.MORPH_CLOSE, k_close)
-                min_area = max(40.0, user_min_area) if user_min_area > 0 else 350.0
+                mask_clean[is_pure_paper] = 0
+                mask_clean[is_uncolored_slope] = 0
+                min_area = max(25.0, user_min_area) if user_min_area > 0 else 100.0
                 approx_eps = 0.5
-                min_hole_area = fill_holes_area * (scale_factor ** 2)
+                min_hole_area = min(3000.0, fill_holes_area) * (scale_factor ** 2)
             elif cid in ("meadow", "garden"):
                 # Clean agricultural parcel blocks without bridging roads
                 k_size = max(5, int(round(closing_kernel_px * scale_factor * 0.6)))
                 k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
                 mask_clean = cv2.morphologyEx(c_mask, cv2.MORPH_CLOSE, k_close)
+                mask_clean[is_pure_paper] = 0
+                mask_clean[is_uncolored_slope] = 0
                 min_area = max(25.0, user_min_area) if user_min_area > 0 else 200.0
+                approx_eps = 0.5
+                min_hole_area = 2000.0 * (scale_factor ** 2)
+            elif cid in ("gravel", "kies"):
+                # Sandbar and gravel bank morphology: bridge stippling dots into contiguous bars
+                k_size = max(3, int(round(closing_kernel_px * scale_factor)))
+                k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+                mask_clean = cv2.morphologyEx(c_mask, cv2.MORPH_CLOSE, k_close)
+                min_area = max(10.0, user_min_area) if user_min_area > 0 else 50.0
                 approx_eps = 0.5
                 min_hole_area = 2000.0 * (scale_factor ** 2)
             else:
@@ -948,6 +1210,8 @@ class PipetteSampler:
                 k_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
                 mask_closed = cv2.morphologyEx(c_mask, cv2.MORPH_CLOSE, k_close)
                 mask_clean = cv2.dilate(mask_closed, k_dilate, iterations=1)
+                mask_clean[is_pure_paper] = 0
+                mask_clean[is_uncolored_slope] = 0
                 min_area = max(25.0, user_min_area) if user_min_area > 0 else 150.0
                 approx_eps = 0.5
                 min_hole_area = 5000.0 * (scale_factor ** 2)
@@ -994,48 +1258,25 @@ class PipetteSampler:
                         poly = poly.buffer(0)
                     
                     def _accept_polygon(p: Polygon) -> bool:
+                        if p is None or p.is_empty:
+                            return False
+                        if not p.is_valid:
+                            p = p.buffer(0)
                         if not p.is_valid or p.is_empty or p.area < min_area:
                             return False
-                        if cid == "forest":
-                            try:
-                                rect = p.minimum_rotated_rectangle
-                                if rect and not rect.is_empty and hasattr(rect, "exterior") and rect.exterior:
-                                    pts = list(rect.exterior.coords)
-                                    if len(pts) >= 4:
-                                        edge1 = np.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
-                                        edge2 = np.hypot(pts[2][0] - pts[1][0], pts[2][1] - pts[1][1])
-                                        min_thick = min(edge1, edge2)
-                                        aspect = max(edge1, edge2) / (min_thick + 1e-4)
-                                        # Reject narrow roadside ribbons, ditches, and hedgerow filaments
-                                        if p.area < 25000.0:
-                                            if min_thick < 24.0 or aspect > 3.8:
-                                                return False
-                                        else:
-                                            if min_thick < 20.0 and aspect > 5.5:
-                                                return False
-                            except Exception:
-                                pass
-                            return True
-                        elif cid in ("meadow", "garden", "vineyard", "gravel"):
-                            try:
-                                rect = p.minimum_rotated_rectangle
-                                if rect and not rect.is_empty and hasattr(rect, "exterior") and rect.exterior:
-                                    pts = list(rect.exterior.coords)
-                                    if len(pts) >= 4:
-                                        edge1 = np.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
-                                        edge2 = np.hypot(pts[2][0] - pts[1][0], pts[2][1] - pts[1][1])
-                                        min_thick = min(edge1, edge2)
-                                        aspect = max(edge1, edge2) / (min_thick + 1e-4)
-                                        # Reject narrow road ribbons & linear ditch strips
-                                        if p.area < 25000.0:
-                                            if min_thick < 25.0 or aspect > 3.0:
-                                                return False
-                                        else:
-                                            if min_thick < 20.0 and aspect > 5.0:
-                                                return False
-                            except Exception:
-                                pass
-                            return True
+                        # Filter out extreme 1-2 pixel raster sliver artifacts
+                        try:
+                            rect = p.minimum_rotated_rectangle
+                            if rect and not rect.is_empty and hasattr(rect, "exterior") and rect.exterior:
+                                pts = list(rect.exterior.coords)
+                                if len(pts) >= 4:
+                                    edge1 = np.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
+                                    edge2 = np.hypot(pts[2][0] - pts[1][0], pts[2][1] - pts[1][1])
+                                    min_thick = min(edge1, edge2)
+                                    if min_thick < 3.0:
+                                        return False
+                        except Exception:
+                            pass
                         return True
 
                     if poly.is_valid and not poly.is_empty:
@@ -1051,7 +1292,64 @@ class PipetteSampler:
 
             results[sample.class_id] = polys
 
-        return results
+        # 8. Strict topological non-overlap enforcement
+        # Guarantee mathematically ZERO overlap across all extracted polygons (both internal and cross-class)
+        from shapely.ops import unary_union
+        from shapely.geometry import MultiPolygon, GeometryCollection
+
+        priority_order = ["water", "forest", "vineyard", "meadow", "garden", "gravel"]
+        ordered_classes = [c for c in priority_order if c in results]
+        for c in results:
+            if c not in ordered_classes:
+                ordered_classes.append(c)
+
+        clean_results: Dict[str, List[Polygon]] = {}
+        occupied_union = None
+
+        for cid in ordered_classes:
+            plist = results.get(cid, [])
+            if not plist:
+                clean_results[cid] = []
+                continue
+
+            # A. Dissolve internal overlaps within the class
+            u = unary_union(plist)
+            if not u.is_valid:
+                u = u.buffer(0)
+
+            # B. Subtract already occupied areas from higher-priority classes
+            if occupied_union is not None and not occupied_union.is_empty:
+                try:
+                    u = u.difference(occupied_union)
+                    if not u.is_valid:
+                        u = u.buffer(0)
+                except Exception:
+                    pass
+
+            # C. Extract individual polygons and filter micro-slivers
+            user_min_area = float(getattr(self.samples.get(cid), "min_area_px", 0.0))
+            thresh_area = max(25.0, user_min_area) if user_min_area > 0 else 25.0
+
+            sub_polys: List[Polygon] = []
+            if isinstance(u, Polygon):
+                if u.is_valid and not u.is_empty and u.area >= thresh_area:
+                    sub_polys.append(u)
+            elif isinstance(u, (MultiPolygon, GeometryCollection)) or hasattr(u, "geoms"):
+                for g in u.geoms:
+                    if isinstance(g, Polygon) and g.is_valid and not g.is_empty and g.area >= thresh_area:
+                        sub_polys.append(g)
+
+            clean_results[cid] = sub_polys
+
+            # D. Update occupied union
+            if sub_polys:
+                this_u = unary_union(sub_polys)
+                if occupied_union is None:
+                    occupied_union = this_u
+                else:
+                    occupied_union = unary_union([occupied_union, this_u])
+
+        return clean_results
 
 
 
@@ -1064,6 +1362,8 @@ class PipetteSampler:
         """Extracts polygons for a specific class using the unified competitive pipeline."""
         if class_id not in self.samples:
             return []
+        if tolerance_override is not None:
+            self.samples[class_id].tolerance = tolerance_override
         all_res = self.extract_competitive_polygons(image_rgb, active_class_ids=[class_id])
         return all_res.get(class_id, [])
 

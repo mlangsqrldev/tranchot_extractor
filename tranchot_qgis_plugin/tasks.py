@@ -354,6 +354,7 @@ class LandUseExtractionTask(QgsTask):
         output_crs: str = "EPSG:25832",
         pipette_sampler: Optional[Any] = None,
         closing_kernel_px: int = 18,
+        existing_obstacles_wkt: Optional[List[str]] = None,
     ):
         super().__init__(f"HistMap: Land Use ({layer_name})", QgsTask.CanCancel)
         self.raster_path = raster_path
@@ -365,6 +366,7 @@ class LandUseExtractionTask(QgsTask):
         self.output_crs = output_crs
         self.pipette_sampler = pipette_sampler
         self.closing_kernel_px = closing_kernel_px
+        self.existing_obstacles_wkt = existing_obstacles_wkt or []
 
         self.extracted_features: List[Dict[str, Any]] = []
         self.error_msg: Optional[str] = None
@@ -515,8 +517,22 @@ class LandUseExtractionTask(QgsTask):
                 "gravel": "Gravel & Sandbars",
             }
 
+            # Build union of existing obstacles (from other land use layers) to guarantee zero overlap
+            existing_obstacle_union = None
+            if self.existing_obstacles_wkt:
+                try:
+                    import shapely.wkt
+                    from shapely.ops import unary_union
+                    obs_geoms = [shapely.wkt.loads(w) for w in self.existing_obstacles_wkt]
+                    obs_geoms = [g for g in obs_geoms if g.is_valid and not g.is_empty]
+                    if obs_geoms:
+                        existing_obstacle_union = unary_union(obs_geoms)
+                except Exception as e:
+                    QgsMessageLog.logMessage(f"HistMap: Could not parse existing obstacles: {e}", "HistMap", Qgis.Warning)
+
             # Transform Shapely polygons to Map CRS
             m2_per_px2 = abs(px_w * px_h)
+            feat_id_counter = 1
             for feat in features_list:
                 poly = feat.geometry
                 if poly is None or poly.is_empty:
@@ -536,15 +552,35 @@ class LandUseExtractionTask(QgsTask):
                     if not geo_poly.is_valid:
                         geo_poly = geo_poly.buffer(0)
 
-                    if geo_poly.is_valid and not geo_poly.is_empty:
+                    # Strictly subtract any existing obstacles from other land use layers
+                    if existing_obstacle_union is not None and not existing_obstacle_union.is_empty:
+                        try:
+                            geo_poly = geo_poly.difference(existing_obstacle_union)
+                            if not geo_poly.is_valid:
+                                geo_poly = geo_poly.buffer(0)
+                        except Exception:
+                            pass
+
+                    from shapely.geometry import MultiPolygon
+                    sub_geos = []
+                    if isinstance(geo_poly, Polygon):
+                        if geo_poly.is_valid and not geo_poly.is_empty and geo_poly.area >= (m2_per_px2 * 10.0):
+                            sub_geos.append(geo_poly)
+                    elif isinstance(geo_poly, MultiPolygon) or hasattr(geo_poly, "geoms"):
+                        for sub_g in geo_poly.geoms:
+                            if isinstance(sub_g, Polygon) and sub_g.is_valid and not sub_g.is_empty and sub_g.area >= (m2_per_px2 * 10.0):
+                                sub_geos.append(sub_g)
+
+                    for g_item in sub_geos:
                         self.extracted_features.append({
-                            "id": feat.id,
-                            "wkt": geo_poly.wkt,
+                            "id": feat_id_counter,
+                            "wkt": g_item.wkt,
                             "category": feat.category,
                             "category_label": category_label_map.get(feat.category, feat.category.capitalize()),
-                            "area_m2": round(float(feat.area_px) * m2_per_px2, 2),
-                            "perimeter_m": round(float(geo_poly.length), 2),
+                            "area_m2": round(float(g_item.area), 2),
+                            "perimeter_m": round(float(g_item.length), 2),
                         })
+                        feat_id_counter += 1
                 except Exception as e:
                     QgsMessageLog.logMessage(f"LandUse geometry transformation error: {e}", "HistMap", Qgis.Warning)
 
@@ -593,14 +629,14 @@ class LandUseExtractionTask(QgsTask):
             pr.addAttributes(fields)
             vl.updateFields()
 
-            # Categorized Symbology styling with historical palette
+            # Categorized Symbology styling with historical watercolor palette (translucent fill so map remains legible)
             categories = [
-                ("forest", "Forest", "46,125,50,180", "27,94,32,255"),
-                ("meadow", "Meadow & Pasture", "129,199,132,180", "56,142,60,255"),
-                ("water", "Water Bodies", "30,136,229,210", "13,71,161,255"),
-                ("garden", "Gardens & Cultivated Land", "255,183,77,180", "230,81,0,255"),
-                ("vineyard", "Vineyards & Slopes", "186,104,200,180", "123,31,162,255"),
-                ("gravel", "Gravel & Sandbars", "225,112,85,180", "180,80,50,255"),
+                ("forest", "Forest", "46,125,50,100", "27,94,32,240"),
+                ("meadow", "Meadow & Pasture", "129,199,132,100", "56,142,60,240"),
+                ("water", "Water Bodies", "30,136,229,120", "13,71,161,240"),
+                ("garden", "Gardens & Cultivated Land", "255,183,77,100", "230,81,0,240"),
+                ("vineyard", "Vineyards & Slopes", "186,104,200,100", "123,31,162,240"),
+                ("gravel", "Gravel & Sandbars", "225,112,85,100", "180,80,50,240"),
             ]
 
             cats = []

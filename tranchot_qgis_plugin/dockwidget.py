@@ -604,10 +604,13 @@ class TranchotDockWidget(QDockWidget):
         # Scope Radio Buttons
         scope_box = QHBoxLayout()
         self.rb_lu_roi = QRadioButton("Drawn Area (ROI)", checked=True)
+        self.rb_lu_view = QRadioButton("Current View")
         self.rb_lu_sheet = QRadioButton("Full Map Sheet")
         self.rb_lu_roi.toggled.connect(self._trigger_lu_preview_update)
+        self.rb_lu_view.toggled.connect(self._trigger_lu_preview_update)
         self.rb_lu_sheet.toggled.connect(self._trigger_lu_preview_update)
         scope_box.addWidget(self.rb_lu_roi)
+        scope_box.addWidget(self.rb_lu_view)
         scope_box.addWidget(self.rb_lu_sheet)
         roi_layout.addLayout(scope_box)
 
@@ -629,6 +632,7 @@ class TranchotDockWidget(QDockWidget):
         self.combo_lu_sample_class.addItem("🏡 Gardens & Cultivated Land", "garden")
         self.combo_lu_sample_class.addItem("🍇 Vineyards & Slopes", "vineyard")
         self.combo_lu_sample_class.addItem("🏖️ Gravel & Sandbars", "gravel")
+        self.combo_lu_sample_class.currentIndexChanged.connect(self._on_lu_sample_class_changed)
         row_class.addWidget(self.combo_lu_sample_class, 1)
         pip_layout.addLayout(row_class)
 
@@ -699,7 +703,7 @@ class TranchotDockWidget(QDockWidget):
             sp.setRange(min_v, max_v)
             sp.setSingleStep(step)
             sp.setValue(def_v)
-            sp.setFixedWidth(75)
+            sp.setFixedWidth(85)
             h_layout.addWidget(sp)
             row.addLayout(h_layout)
 
@@ -746,11 +750,12 @@ class TranchotDockWidget(QDockWidget):
             min_v=4, max_v=60, step=1, def_v=18
         )
 
-        tt_area = "<h3>Minimum Area (px)</h3><p>Filters out isolated speckles and noise below this pixel threshold.</p>"
+        tt_area = "<h3>Minimum Area (px)</h3><p>Filters out isolated speckles and noise below this pixel threshold. For large historical forests, set to 2,000–10,000 px.</p>"
         self.spin_lu_min_area, self.slider_lu_min_area = add_lu_slider(
             param_layout, "📐 Minimum Area (px):", tt_area,
-            min_v=20, max_v=1500, step=10, def_v=120
+            min_v=10, max_v=10000, step=50, def_v=120
         )
+        self.spin_lu_min_area.setRange(5, 100000)
 
         self.chk_lu_live_preview = QCheckBox("⚡ Live Preview (instant response to sliders)")
         self.chk_lu_live_preview.setChecked(True)
@@ -761,7 +766,14 @@ class TranchotDockWidget(QDockWidget):
         # 4. Categories & Final Vectorization
         cat_group = QGroupBox("D. Categories & Vectorization")
         cat_layout = QVBoxLayout(cat_group)
-        self.chk_lu_forest = QCheckBox("🌲 Forest (Olive wash & tree crown texture)")
+
+        self.chk_lu_only_target = QCheckBox("🎯 Extract ONLY selected Target Class (🌲 Forest)")
+        self.chk_lu_only_target.setChecked(True)
+        self.chk_lu_only_target.setStyleSheet("font-weight: bold; color: #1b5e20;")
+        self.chk_lu_only_target.toggled.connect(self._on_lu_only_target_toggled)
+        cat_layout.addWidget(self.chk_lu_only_target)
+
+        self.chk_lu_forest = QCheckBox("🌲 Forest & Woodland (Green wash & Busch/Hecken)")
         self.chk_lu_forest.setChecked(True)
         self.chk_lu_forest.toggled.connect(self._trigger_lu_preview_update)
         cat_layout.addWidget(self.chk_lu_forest)
@@ -776,8 +788,8 @@ class TranchotDockWidget(QDockWidget):
         self.chk_lu_water.toggled.connect(self._trigger_lu_preview_update)
         cat_layout.addWidget(self.chk_lu_water)
 
-        self.chk_lu_garden = QCheckBox("🏡 Gardens & Cultivated Land")
-        self.chk_lu_garden.setChecked(True)
+        self.chk_lu_garden = QCheckBox("🏡 Gardens & Village Plots (Allotments)")
+        self.chk_lu_garden.setChecked(False)
         self.chk_lu_garden.toggled.connect(self._trigger_lu_preview_update)
         cat_layout.addWidget(self.chk_lu_garden)
 
@@ -799,6 +811,84 @@ class TranchotDockWidget(QDockWidget):
 
         layout.addStretch(1)
         self.tabs.addTab(tab, "🌲 Land Use")
+        self._update_lu_category_selection_mode()
+
+    def _on_lu_sample_class_changed(self, index: int):
+        """Called when user selects a different target class in the dropdown."""
+        self._update_lu_category_selection_mode()
+
+        target_cid = self.combo_lu_sample_class.currentData()
+        if hasattr(self, 'pipette_sampler') and self.pipette_sampler and target_cid in self.pipette_sampler.samples:
+            s = self.pipette_sampler.samples[target_cid]
+            # Synchronize sliders to the selected category profile
+            if hasattr(self, 'spin_lu_tol') and hasattr(self, 'slider_lu_tol'):
+                self.slider_lu_tol.blockSignals(True)
+                self.spin_lu_tol.blockSignals(True)
+                self.slider_lu_tol.setValue(int(s.tolerance))
+                self.spin_lu_tol.setValue(int(s.tolerance))
+                self.slider_lu_tol.blockSignals(False)
+                self.spin_lu_tol.blockSignals(False)
+
+            if hasattr(self, 'spin_lu_tex_w') and hasattr(self, 'slider_lu_tex_w'):
+                self.slider_lu_tex_w.blockSignals(True)
+                self.spin_lu_tex_w.blockSignals(True)
+                self.slider_lu_tex_w.setValue(int(round(s.texture_weight * 10.0)))
+                self.spin_lu_tex_w.setValue(float(s.texture_weight))
+                self.slider_lu_tex_w.blockSignals(False)
+                self.spin_lu_tex_w.blockSignals(False)
+
+            if hasattr(self, 'spin_lu_min_area') and hasattr(self, 'slider_lu_min_area'):
+                self.slider_lu_min_area.blockSignals(True)
+                self.spin_lu_min_area.blockSignals(True)
+                self.slider_lu_min_area.setValue(int(s.min_area_px))
+                self.spin_lu_min_area.setValue(int(s.min_area_px))
+                self.slider_lu_min_area.blockSignals(False)
+                self.spin_lu_min_area.blockSignals(False)
+
+            # Update nuance stamp counter label for the new target class
+            if hasattr(self, 'lbl_lu_stamps_summary'):
+                total_stamps = sum(len(samp.stamps) for samp in self.pipette_sampler.samples.values())
+                class_stamps = len(self.pipette_sampler.get_stamps(target_cid))
+                if class_stamps > 0:
+                    self.lbl_lu_stamps_summary.setText(f"{class_stamps} nuances active for {s.label} ({total_stamps} total)")
+                else:
+                    self.lbl_lu_stamps_summary.setText(f"Default color & texture profile active for {s.label}")
+
+        self._trigger_lu_preview_update()
+
+    def _on_lu_only_target_toggled(self, checked: bool):
+        """Toggles between single target class extraction and multi-category extraction."""
+        self._update_lu_category_selection_mode()
+
+    def _update_lu_category_selection_mode(self):
+        """Synchronizes UI controls between single target class and multi-category mode."""
+        if not hasattr(self, 'chk_lu_only_target') or not hasattr(self, 'combo_lu_sample_class'):
+            return
+
+        target_name = self.combo_lu_sample_class.currentText()
+        only_target = self.chk_lu_only_target.isChecked()
+
+        self.chk_lu_only_target.setText(f"🎯 Extract ONLY selected Target Class ({target_name})")
+
+        # Disable/gray out individual checkboxes if single target class mode is active
+        for chk in [
+            getattr(self, 'chk_lu_forest', None),
+            getattr(self, 'chk_lu_meadow', None),
+            getattr(self, 'chk_lu_water', None),
+            getattr(self, 'chk_lu_garden', None),
+            getattr(self, 'chk_lu_vineyard', None),
+            getattr(self, 'chk_lu_gravel', None),
+        ]:
+            if chk is not None:
+                chk.setEnabled(not only_target)
+
+        if hasattr(self, 'btn_extract_landuse'):
+            if only_target:
+                self.btn_extract_landuse.setText(f"🚀 Extract & Save {target_name}")
+            else:
+                self.btn_extract_landuse.setText("🌲 Extract & Save Land Use (All Selected)")
+
+        self._trigger_lu_preview_update()
 
     def _create_text_tab(self):
         """Creates Tab for Text and Toponyms."""
@@ -2272,6 +2362,7 @@ class TranchotDockWidget(QDockWidget):
             return
         self.current_lu_roi_geom = geom
         self.current_lu_roi = geom.boundingBox()
+        self.cached_lu_roi_rgb = None
         ha = geom.area() / 10000.0
         self.lu_roi_info_lbl.setText(
             f"Land Use Area: Area ≈ {geom.area():.0f} m² ({ha:.2f} ha)"
@@ -2303,13 +2394,23 @@ class TranchotDockWidget(QDockWidget):
             self.canvas.unsetMapTool(self.lu_roi_tool)
 
     def _clear_lu_roi(self):
-        """Clears active Land Use ROI, cached data, and preview layers."""
+        """Clears active Land Use ROI, cached data, helper drawings, and preview layers."""
         self.current_lu_roi = None
         self.current_lu_roi_geom = None
+        self.last_sampled_polygon_geom = None
         self.cached_lu_roi_rgb = None
         if hasattr(self, 'lu_roi_rubber_band') and self.lu_roi_rubber_band:
             self.lu_roi_rubber_band.reset(QgsWkbTypes.PolygonGeometry)
             self.lu_roi_rubber_band.hide()
+            self.lu_roi_rubber_band = None
+        if hasattr(self, 'lu_stamp_rubber_bands'):
+            for _, rb in self.lu_stamp_rubber_bands:
+                try:
+                    rb.reset(QgsWkbTypes.PolygonGeometry)
+                    rb.hide()
+                except Exception:
+                    pass
+            self.lu_stamp_rubber_bands.clear()
         if hasattr(self, 'lu_roi_tool') and self.lu_roi_tool:
             self.lu_roi_tool.reset()
         if hasattr(self, 'lu_roi_info_lbl'):
@@ -2324,7 +2425,7 @@ class TranchotDockWidget(QDockWidget):
         for l in QgsProject.instance().mapLayersByName("🔍 Landnutzung (Live-Vorschau)"):
             QgsProject.instance().removeMapLayer(l.id())
 
-        self.status_lbl.setText("Land use area reset.")
+        self.status_lbl.setText("Land use area and helper drawings reset.")
         self.canvas.refresh()
 
     def _cache_lu_roi_data(self):
@@ -2339,6 +2440,8 @@ class TranchotDockWidget(QDockWidget):
 
         if self.rb_lu_roi.isChecked() and self.current_lu_roi is not None and not self.current_lu_roi.isEmpty():
             extent = self.current_lu_roi
+        elif hasattr(self, 'rb_lu_view') and self.rb_lu_view.isChecked():
+            extent = self.canvas.extent()
         else:
             extent = layer.extent()
 
@@ -2483,9 +2586,10 @@ class TranchotDockWidget(QDockWidget):
                     "garden": QColor(200, 160, 50, 255),
                     "gravel": QColor(180, 80, 50, 255),
                 }
-                rb.setFillColor(class_color_map.get(target_cid, QColor(255, 152, 0, 90)))
+                rb.setFillColor(QColor(0, 0, 0, 0))  # 100% transparent interior so map is fully visible
                 rb.setStrokeColor(border_color_map.get(target_cid, QColor(255, 87, 34, 255)))
                 rb.setWidth(2)
+                rb.setLineStyle(Qt.PenStyle.DashLine)
                 rb.setToGeometry(circle_geom, None)
                 rb.show()
                 self.lu_stamp_rubber_bands.append((target_cid, rb))
@@ -2638,9 +2742,10 @@ class TranchotDockWidget(QDockWidget):
                     "garden": QColor(200, 160, 50, 255),
                     "gravel": QColor(180, 80, 50, 255),
                 }
-                rb.setFillColor(class_color_map.get(target_cid, QColor(255, 152, 0, 90)))
+                rb.setFillColor(QColor(0, 0, 0, 0))  # 100% transparent interior so underlying map is never obscured
                 rb.setStrokeColor(border_color_map.get(target_cid, QColor(255, 87, 34, 255)))
                 rb.setWidth(2)
+                rb.setLineStyle(Qt.PenStyle.DashLine)
                 rb.setToGeometry(geom, None)
                 rb.show()
                 self.lu_stamp_rubber_bands.append((target_cid, rb))
@@ -2769,11 +2874,15 @@ class TranchotDockWidget(QDockWidget):
                 elif hasattr(self, 'current_roi') and self.current_roi is not None and not self.current_roi.isEmpty():
                     self.current_lu_roi = self.current_roi
                     self.current_lu_roi_geom = getattr(self, 'current_roi_geom', None)
+                else:
+                    # Fallback to current map canvas view so sliders always update live
+                    self.current_lu_roi = self.canvas.extent()
+                    self.current_lu_roi_geom = None
 
-            if self.current_lu_roi is None or self.current_lu_roi.isEmpty():
-                return
             if self.cached_lu_roi_rgb is None:
                 self._cache_lu_roi_data()
+        elif hasattr(self, 'rb_lu_view') and self.rb_lu_view.isChecked():
+            self._cache_lu_roi_data()
         else:
             if self.cached_lu_roi_rgb is None:
                 self._cache_lu_roi_data()
@@ -2786,26 +2895,36 @@ class TranchotDockWidget(QDockWidget):
         px_w, px_h = self.cached_lu_px_size
 
         enabled_cats = []
-        if self.chk_lu_forest.isChecked(): enabled_cats.append("forest")
-        if self.chk_lu_meadow.isChecked(): enabled_cats.append("meadow")
-        if self.chk_lu_water.isChecked(): enabled_cats.append("water")
-        if self.chk_lu_garden.isChecked(): enabled_cats.append("garden")
-        if self.chk_lu_vineyard.isChecked(): enabled_cats.append("vineyard")
-        if hasattr(self, 'chk_lu_gravel') and self.chk_lu_gravel.isChecked(): enabled_cats.append("gravel")
+        if hasattr(self, 'chk_lu_only_target') and self.chk_lu_only_target.isChecked():
+            target_cat = self.combo_lu_sample_class.currentData()
+            enabled_cats = [target_cat] if target_cat else ["forest"]
+        else:
+            if self.chk_lu_forest.isChecked(): enabled_cats.append("forest")
+            if self.chk_lu_meadow.isChecked(): enabled_cats.append("meadow")
+            if self.chk_lu_water.isChecked(): enabled_cats.append("water")
+            if self.chk_lu_garden.isChecked(): enabled_cats.append("garden")
+            if self.chk_lu_vineyard.isChecked(): enabled_cats.append("vineyard")
+            if hasattr(self, 'chk_lu_gravel') and self.chk_lu_gravel.isChecked(): enabled_cats.append("gravel")
 
         if not enabled_cats or self.pipette_sampler is None:
             return
 
-        # Update sampler parameters from sliders
+        # Update sampler parameters from sliders and spinboxes
         tol_val = int(self.slider_lu_tol.value())
-        min_area_val = float(self.slider_lu_min_area.value())
+        min_area_val = float(self.spin_lu_min_area.value())
         tex_w_val = float(self.slider_lu_tex_w.value()) / 10.0
         closing_val = int(self.slider_lu_closing.value()) if hasattr(self, 'slider_lu_closing') else 18
 
-        for s in self.pipette_sampler.samples.values():
-            s.tolerance = tol_val
-            s.min_area_px = min_area_val
-            s.texture_weight = tex_w_val
+        target_cat = self.combo_lu_sample_class.currentData() if hasattr(self, 'combo_lu_sample_class') else None
+        for cid, s in self.pipette_sampler.samples.items():
+            if target_cat and cid == target_cat:
+                s.tolerance = tol_val
+                s.min_area_px = min_area_val
+                s.texture_weight = tex_w_val
+            elif not hasattr(self, 'chk_lu_only_target') or not self.chk_lu_only_target.isChecked():
+                s.tolerance = tol_val
+                s.min_area_px = min_area_val
+                s.texture_weight = tex_w_val
 
         try:
             polys_by_class = self.pipette_sampler.extract_competitive_polygons(
@@ -2838,12 +2957,12 @@ class TranchotDockWidget(QDockWidget):
             vl_prev.updateFields()
 
             categories = [
-                ("forest", "Forest", "46,125,50,150", "27,94,32,230"),
-                ("meadow", "Meadow & Pasture", "0,206,201,150", "0,150,140,230"),
-                ("water", "Water Bodies", "9,132,227,180", "13,71,161,240"),
-                ("garden", "Gardens & Cultivated Land", "253,203,110,150", "200,160,50,230"),
-                ("vineyard", "Vineyards & Slopes", "214,48,49,150", "150,30,30,230"),
-                ("gravel", "Gravel & Sandbars", "225,112,85,150", "180,80,50,230"),
+                ("forest", "Forest", "46,125,50,55", "27,94,32,200"),
+                ("meadow", "Meadow & Pasture", "0,206,201,55", "0,150,140,200"),
+                ("water", "Water Bodies", "9,132,227,70", "13,71,161,220"),
+                ("garden", "Gardens & Cultivated Land", "253,203,110,55", "200,160,50,200"),
+                ("vineyard", "Vineyards & Slopes", "214,48,49,55", "150,30,30,200"),
+                ("gravel", "Gravel & Sandbars", "225,112,85,55", "180,80,50,200"),
             ]
             cats = []
             for cat_val, cat_lbl, fill_col, border_col in categories:
@@ -2906,6 +3025,21 @@ class TranchotDockWidget(QDockWidget):
 
         vl_prev.updateExtents()
         vl_prev.triggerRepaint()
+
+        # Ensure live preview layer is visible and positioned at the top of the layer tree
+        try:
+            root = QgsProject.instance().layerTreeRoot()
+            layer_node = root.findLayer(vl_prev.id())
+            if layer_node is not None:
+                layer_node.setItemVisibilityChecked(True)
+                if root.children() and root.children()[0] != layer_node:
+                    parent = layer_node.parent() or root
+                    clone = layer_node.clone()
+                    parent.removeChildNode(layer_node)
+                    root.insertChildNode(0, clone)
+        except Exception:
+            pass
+
         self.canvas.refresh()
         self.status_lbl.setText(f"🔍 Land Use Live Preview: {len(new_feats)} areas detected.")
 
@@ -2921,20 +3055,27 @@ class TranchotDockWidget(QDockWidget):
             QMessageBox.critical(self, "File Error", f"Raster file does not exist:\n{raster_path}")
             return
 
-        # Determine enabled categories
-        enabled_cats = []
-        if self.chk_lu_forest.isChecked():
-            enabled_cats.append("forest")
-        if self.chk_lu_meadow.isChecked():
-            enabled_cats.append("meadow")
-        if self.chk_lu_water.isChecked():
-            enabled_cats.append("water")
-        if self.chk_lu_garden.isChecked():
-            enabled_cats.append("garden")
-        if self.chk_lu_vineyard.isChecked():
-            enabled_cats.append("vineyard")
-        if hasattr(self, 'chk_lu_gravel') and self.chk_lu_gravel.isChecked():
-            enabled_cats.append("gravel")
+        # Determine enabled categories and layer name
+        if hasattr(self, 'chk_lu_only_target') and self.chk_lu_only_target.isChecked():
+            target_cat = self.combo_lu_sample_class.currentData()
+            enabled_cats = [target_cat] if target_cat else ["forest"]
+            target_text = self.combo_lu_sample_class.currentText()
+            layer_name = f"{target_text} ({layer.name()})"
+        else:
+            enabled_cats = []
+            if self.chk_lu_forest.isChecked():
+                enabled_cats.append("forest")
+            if self.chk_lu_meadow.isChecked():
+                enabled_cats.append("meadow")
+            if self.chk_lu_water.isChecked():
+                enabled_cats.append("water")
+            if self.chk_lu_garden.isChecked():
+                enabled_cats.append("garden")
+            if self.chk_lu_vineyard.isChecked():
+                enabled_cats.append("vineyard")
+            if hasattr(self, 'chk_lu_gravel') and self.chk_lu_gravel.isChecked():
+                enabled_cats.append("gravel")
+            layer_name = f"🌲 Land Use ({layer.name()})"
 
         if not enabled_cats:
             QMessageBox.information(
@@ -2944,9 +3085,12 @@ class TranchotDockWidget(QDockWidget):
             )
             return
 
-        # Check ROI vs full sheet
-        use_roi = self.rb_lu_roi.isChecked()
-        if use_roi:
+        # Check Scope: ROI vs Current View vs Full Sheet
+        if hasattr(self, 'rb_lu_view') and self.rb_lu_view.isChecked():
+            canvas_ext = self.canvas.extent()
+            layer_roi = self._transform_canvas_to_layer_rect(canvas_ext, layer)
+            layer_geom = None
+        elif self.rb_lu_roi.isChecked():
             if self.current_lu_roi is not None and not self.current_lu_roi.isEmpty():
                 layer_roi = self._transform_canvas_to_layer_rect(self.current_lu_roi, layer)
                 layer_geom = self._transform_canvas_to_layer_geom(self.current_lu_roi_geom, layer) if hasattr(self, 'current_lu_roi_geom') and self.current_lu_roi_geom is not None else None
@@ -2993,19 +3137,41 @@ class TranchotDockWidget(QDockWidget):
             config.enable_garden = "garden" in enabled_cats
             config.enable_vineyard = "vineyard" in enabled_cats
 
+        # Collect existing geometries from other land use layers for this raster so new classes never overlap them
+        existing_obstacles_wkt = []
+        try:
+            for l in QgsProject.instance().mapLayers().values():
+                if not isinstance(l, QgsVectorLayer) or l.name() == layer_name:
+                    continue
+                if "Preview" in l.name() or "Vorschau" in l.name():
+                    continue
+                if any(k in l.name() for k in ["Forest", "Wald", "Meadow", "Wiese", "Water", "Gewässer", "Vineyard", "Weinberg", "Garden", "Garten", "Gravel", "Kies", "Land Use", "Landnutzung"]):
+                    for f in l.getFeatures():
+                        geom = f.geometry()
+                        if geom and not geom.isEmpty():
+                            if layer_roi is None or geom.intersects(QgsGeometry.fromRect(layer_roi)):
+                                existing_obstacles_wkt.append(geom.asWkt())
+        except Exception:
+            pass
+
         # Apply current slider values to pipette_sampler
         closing_val = int(self.slider_lu_closing.value()) if hasattr(self, 'slider_lu_closing') else 18
         if self.pipette_sampler is not None:
             tol_val = int(self.slider_lu_tol.value())
-            min_area_val = float(self.slider_lu_min_area.value())
+            min_area_val = float(self.spin_lu_min_area.value())
             tex_w_val = float(self.slider_lu_tex_w.value()) / 10.0
-            for s in self.pipette_sampler.samples.values():
-                s.tolerance = tol_val
-                s.min_area_px = min_area_val
-                s.texture_weight = tex_w_val
+            target_cat = self.combo_lu_sample_class.currentData() if hasattr(self, 'combo_lu_sample_class') else None
+            for cid, s in self.pipette_sampler.samples.items():
+                if target_cat and cid == target_cat:
+                    s.tolerance = tol_val
+                    s.min_area_px = min_area_val
+                    s.texture_weight = tex_w_val
+                elif not hasattr(self, 'chk_lu_only_target') or not self.chk_lu_only_target.isChecked():
+                    s.tolerance = tol_val
+                    s.min_area_px = min_area_val
+                    s.texture_weight = tex_w_val
 
         output_crs = layer.crs().authid() if layer.crs().isValid() else "EPSG:25832"
-        layer_name = f"🌲 Land Use ({layer.name()})"
 
         # Start QgsTask
         self.btn_extract_landuse.setEnabled(False)
@@ -3022,6 +3188,7 @@ class TranchotDockWidget(QDockWidget):
             output_crs=output_crs,
             pipette_sampler=self.pipette_sampler,
             closing_kernel_px=closing_val,
+            existing_obstacles_wkt=existing_obstacles_wkt,
         )
         self.current_task.task_completed.connect(self._on_landuse_task_completed)
         self.current_task.task_failed.connect(self._on_landuse_task_failed)
@@ -3038,6 +3205,31 @@ class TranchotDockWidget(QDockWidget):
             QgsProject.instance().removeMapLayer(l.id())
         for l in QgsProject.instance().mapLayersByName("🔍 Land Use (Live Preview)"):
             QgsProject.instance().removeMapLayer(l.id())
+
+        # Clean up drawn helper polygons, sample markers, and ROI rubber bands:
+        # "wenn die erkennung durch ist, die polygone die ich zeichnen können dann weg"
+        if hasattr(self, 'lu_roi_rubber_band') and self.lu_roi_rubber_band:
+            self.lu_roi_rubber_band.reset(QgsWkbTypes.PolygonGeometry)
+            self.lu_roi_rubber_band.hide()
+            self.lu_roi_rubber_band = None
+
+        if hasattr(self, 'lu_stamp_rubber_bands'):
+            for _, rb in self.lu_stamp_rubber_bands:
+                try:
+                    rb.reset(QgsWkbTypes.PolygonGeometry)
+                    rb.hide()
+                except Exception:
+                    pass
+            self.lu_stamp_rubber_bands.clear()
+
+        self.current_lu_roi = None
+        self.current_lu_roi_geom = None
+        self.last_sampled_polygon_geom = None
+        if hasattr(self, 'lu_roi_info_lbl'):
+            self.lu_roi_info_lbl.setText("Area of Interest: Extracted & Cleared")
+            self.lu_roi_info_lbl.setStyleSheet("color: #888888; font-size: 10px;")
+
+        self.canvas.refresh()
 
         if count == 0:
             QMessageBox.information(

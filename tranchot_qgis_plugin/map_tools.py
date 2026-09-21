@@ -222,7 +222,7 @@ class LandUseSamplePolygonMapTool(QgsMapTool):
         self.points: list = []
 
         self.rubber_band = QgsRubberBand(self.canvas, QgsWkbTypes.PolygonGeometry)
-        self.rubber_band.setFillColor(QColor(255, 152, 0, 40))
+        self.rubber_band.setFillColor(QColor(0, 0, 0, 0))  # 100% transparent interior so map is not obscured
         self.rubber_band.setStrokeColor(QColor(255, 152, 0, 240))
         self.rubber_band.setWidth(2)
         self.rubber_band.setLineStyle(Qt.PenStyle.DashLine)
